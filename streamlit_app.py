@@ -1,5 +1,3 @@
-import os
-from bespokelabs import BespokeLabs
 import streamlit as st
 __import__('pysqlite3')
 import sys
@@ -8,17 +6,19 @@ import chromadb
 import openai
 import requests
 from crewai import Agent, Crew, Task, Process
+from bespokelabs import BespokeLabs
 
 # OpenAI API Key Setup
 openai.api_key = st.secrets["openai"]["api_key"]
 
-# BespokeLabs API Setup
-bespoke_api_key = os.environ.get("BESPOKE_API_KEY")
-bl = BespokeLabs(auth_token=bespoke_api_key)
-
 # Initialize ChromaDB Client
 if "chroma_client" not in st.session_state:
     st.session_state.chroma_client = chromadb.PersistentClient()
+
+# Initialize Bespoke Labs
+bl = BespokeLabs(
+    auth_token=st.secrets["bespoke_labs"]["api_key"]
+)
 
 # Custom RAG Functionality
 class RAGHelper:
@@ -91,17 +91,40 @@ class RAGHelper:
             st.error(f"Error generating newsletter: {e}")
             return "Newsletter generation failed due to an error."
 
-# Fact-checking function
-def fact_check_newsletter(newsletter_content):
+# Bespoke Labs Accuracy Assessment
+def assess_accuracy_with_bespoke(newsletter_content, rag_context):
+    """
+    Assess the accuracy of the newsletter content using Bespoke Labs.
+    """
     try:
+        st.markdown("### Debugging Information for Bespoke Labs")
+        st.markdown("**Claim (Newsletter Content):**")
+        st.text(newsletter_content)
+
+        st.markdown("**Context (RAG Data):**")
+        st.text(rag_context)
+
+        # Call Bespoke Labs API
         response = bl.minicheck.factcheck.create(
             claim=newsletter_content,
-            context="market newsletter"
+            context=rag_context,
         )
-        return response.support_prob  # Accuracy probability of the newsletter
+
+        # Display the raw response
+        st.markdown("**Raw Bespoke Labs Response:**")
+        st.json({
+            "support_prob": response.support_prob,
+            "other_info": str(response)  # Log additional info
+        })
+
+        # Extract and return the support probability
+        return round(response.support_prob * 100, 2)  # Convert to percentage
+    except AttributeError as e:
+        st.error(f"Error: Missing or incorrect response attribute. Details: {e}")
+        return 0
     except Exception as e:
-        st.error(f"Error fact-checking newsletter: {e}")
-        return None
+        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
+        return 0
 
 # Alpha Vantage Data Fetching
 def fetch_market_news():
@@ -167,7 +190,7 @@ class MarketNewsletterCrew:
         )
 
 # Streamlit Interface
-st.title("Market Data Newsletter with CrewAI, OpenAI, RAG, and BespokeLabs")
+st.title("Market Data Newsletter with CrewAI, OpenAI, and RAG")
 
 # Initialize Crew
 crew_instance = MarketNewsletterCrew()
@@ -188,7 +211,7 @@ if st.button("Fetch and Add Data to RAG"):
         metadata = [{"ticker": g["ticker"], "price": g["price"], "change": g["change_percentage"]} for g in gainers]
         crew_instance.rag_helper.add("trends_collection", documents, metadata)
 
-if st.button("Generate and Fact-Check Newsletter"):
+if st.button("Generate Newsletter"):
     try:
         # Query and summarize company insights
         company_insights = crew_instance.rag_helper.query("news_collection", "latest company news")
@@ -203,13 +226,11 @@ if st.button("Generate and Fact-Check Newsletter"):
 
         # Generate newsletter
         newsletter = crew_instance.newsletter_generator(summarized_company, summarized_trends, risks)
-
-        # Fact-check the newsletter
-        accuracy = fact_check_newsletter(newsletter)
         st.markdown(newsletter)
-        if accuracy is not None:
-            st.success(f"Newsletter accuracy: {accuracy * 100:.2f}%")
-        else:
-            st.warning("Fact-checking results unavailable.")
+
+        # Assess accuracy with Bespoke Labs
+        rag_context = "\n".join(company_insights + market_trends)
+        accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
+        st.markdown(f"**Accuracy Score:** {accuracy_score}%")
     except Exception as e:
-        st.error(f"Error generating newsletter: {e}")
+        st.error(f"Error generating newsletter or assessing accuracy: {e}")
