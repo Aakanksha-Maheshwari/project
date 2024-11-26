@@ -113,8 +113,10 @@ def fetch_market_news():
         st.error(f"Error fetching market news: {e}")
         return []
 
-# Fetch Gainers and Losers
 def fetch_gainers_losers():
+    """
+    Fetch top gainers and losers from Alpha Vantage API.
+    """
     try:
         params = {
             "function": "TOP_GAINERS_LOSERS",
@@ -122,7 +124,17 @@ def fetch_gainers_losers():
         }
         response = requests.get("https://www.alphavantage.co/query", params=params)
         response.raise_for_status()
-        return response.json()
+        
+        # Log raw response for debugging
+        raw_data = response.json()
+        st.write("Raw Gainers and Losers Data:", raw_data)  # Debugging log
+
+        # Validate the response structure
+        gainers = raw_data.get("top_gainers", [])
+        losers = raw_data.get("top_losers", [])
+        if not gainers and not losers:
+            st.warning("No gainers or losers data found in the response.")
+        return raw_data
     except Exception as e:
         st.error(f"Error fetching gainers and losers: {e}")
         return {}
@@ -186,12 +198,38 @@ if st.button("Fetch and Add Data to RAG"):
         metadata = [{"title": article.get("title", ""), "source": article.get("source", "")} for article in news_data]
         rag_helper.add("news_collection", documents, metadata)
 
-    gainers_losers_data = fetch_gainers_losers()
-    if gainers_losers_data:
-        gainers = gainers_losers_data.get("top_gainers", [])
-        documents = [f"{g['ticker']} - ${g['price']} ({g['change_percentage']}%)" for g in gainers]
-        metadata = [{"ticker": g["ticker"], "price": g["price"], "change": g["change_percentage"]} for g in gainers]
+    # Fetch and Add Gainers/Losers Data
+        gainers_losers_data = fetch_gainers_losers()
+        if gainers_losers_data:
+            gainers = gainers_losers_data.get("top_gainers", [])
+            losers = gainers_losers_data.get("top_losers", [])
+
+        # Check if data is available
+        if gainers or losers:
+            # Combine gainers and losers
+            documents = [
+                f"{item['ticker']} - ${item['price']} ({item['change_percentage']}%)"
+                for item in gainers + losers
+            ]
+            metadata = [
+                {
+                    "ticker": item["ticker"],
+                    "price": item["price"],
+                    "change": item["change_percentage"]
+                }
+                for item in gainers + losers
+            ]
+
+        # Log processed data
+        st.write("Processed Gainers and Losers Data:", documents, metadata)  # Debugging log
+
+        # Add to RAG
         rag_helper.add("trends_collection", documents, metadata)
+    else:
+        st.warning("No valid gainers or losers data to add to RAG.")
+else:
+    st.error("Failed to fetch gainers and losers data.")
+
 
 # Generate Newsletter
 if st.button("Generate Newsletter"):
