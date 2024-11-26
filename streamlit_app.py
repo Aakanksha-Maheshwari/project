@@ -1,151 +1,190 @@
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
-
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
-
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
-
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+import chromadb
+import openai
+import requests
+from crewai import Agent, Crew, Task, Process
+ 
+# OpenAI API Key Setup
+openai.api_key = st.secrets["openai"]["api_key"]
+ 
+# Initialize ChromaDB Client
+if "chroma_client" not in st.session_state:
+    st.session_state.chroma_client = chromadb.PersistentClient()
+ 
+# Custom RAG Functionality
+class RAGHelper:
+    def __init__(self, client):
+        self.client = client
+ 
+    def query(self, collection_name, query, n_results=5):
+        try:
+            collection = self.client.get_or_create_collection(name=collection_name)
+            results = collection.query(query_texts=[query], n_results=n_results)
+            documents = [doc for sublist in results["documents"] for doc in sublist]  # Flatten nested lists
+            return documents
+        except Exception as e:
+            st.error(f"Error querying RAG: {e}")
+            return []
+ 
+    def add(self, collection_name, documents, metadata):
+        try:
+            collection = self.client.get_or_create_collection(name=collection_name)
+            collection.add(
+                documents=documents,
+                metadatas=metadata,
+                ids=[str(i) for i in range(len(documents))]
+            )
+            st.success(f"Data successfully added to the '{collection_name}' collection.")
+        except Exception as e:
+            st.error(f"Error adding to RAG: {e}")
+ 
+    def summarize(self, data, context="general insights"):
+        try:
+            input_text = "\n".join(data) if isinstance(data, list) else str(data)
+            prompt = f"Summarize the following {context}:\n\n{input_text}\n\nProvide a concise summary."
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that summarizes data."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            st.error(f"Error summarizing data: {e}")
+            return "Summary unavailable due to an error."
+ 
+    def generate_newsletter(self, company_insights, market_trends, risks):
+        try:
+            messages = [
+                {"role": "system", "content": "You are a professional assistant tasked with creating market newsletters."},
+                {"role": "user", "content": f"""
+                Generate a professional daily market newsletter based on the following data:
+ 
+                Company Insights:
+                {company_insights}
+ 
+                Market Trends:
+                {market_trends}
+ 
+                Risk Analysis:
+                {risks}
+ 
+                Format it concisely and professionally, focusing on insights.
+                """}
+            ]
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=messages
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            st.error(f"Error generating newsletter: {e}")
+            return "Newsletter generation failed due to an error."
+ 
+# Alpha Vantage Data Fetching
+def fetch_market_news():
+    try:
+        params = {
+            "function": "NEWS_SENTIMENT",
+            "apikey": st.secrets["alpha_vantage"]["api_key"],
+            "limit": 50,
+            "sort": "RELEVANCE",
+        }
+        response = requests.get("https://www.alphavantage.co/query", params=params)
+        response.raise_for_status()
+        return response.json().get("feed", [])
+    except Exception as e:
+        st.error(f"Error fetching market news: {e}")
+        return []
+ 
+def fetch_gainers_losers():
+    try:
+        params = {
+            "function": "TOP_GAINERS_LOSERS",
+            "apikey": st.secrets["alpha_vantage"]["api_key"],
+        }
+        response = requests.get("https://www.alphavantage.co/query", params=params)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Error fetching gainers and losers: {e}")
+        return {}
+ 
+# Market Newsletter Crew
+class MarketNewsletterCrew:
+    def __init__(self):
+        self.rag_helper = RAGHelper(client=st.session_state.chroma_client)
+ 
+    def company_analyst(self, task_input):
+        """Analyze company news."""
+        return self.rag_helper.summarize(task_input, context="company insights")
+ 
+    def market_trends_analyst(self, task_input):
+        """Analyze market trends."""
+        return self.rag_helper.summarize(task_input, context="market trends")
+ 
+    def risk_manager(self, company_insights, market_trends):
+        """Evaluate risks based on insights."""
+        prompt_risks = f"Assess risks based on:\n\nCompany Insights:\n{company_insights}\n\nMarket Trends:\n{market_trends}"
+        return self.rag_helper.summarize([prompt_risks], context="risk assessment")
+ 
+    def newsletter_generator(self, company_insights, market_trends, risks):
+        """Generate the newsletter."""
+        return self.rag_helper.generate_newsletter(company_insights, market_trends, risks)
+ 
+    def crew(self):
+        """Define the Crew process."""
+        return Crew(
+            agents=[
+                Agent(name="Company Analyst", task=self.company_analyst),
+                Agent(name="Market Trends Analyst", task=self.market_trends_analyst),
+                Agent(name="Risk Manager", task=self.risk_manager),
+                Agent(name="Newsletter Generator", task=self.newsletter_generator),
+            ],
+            process=Process.sequential
         )
+ 
+# Streamlit Interface
+st.title("Market Data Newsletter with CrewAI, OpenAI, and RAG")
+ 
+# Initialize Crew
+crew_instance = MarketNewsletterCrew()
+ 
+if st.button("Fetch and Add Data to RAG"):
+    # Fetch and add news to RAG
+    news_data = fetch_market_news()
+    if news_data:
+        documents = [article.get("summary", "No summary") for article in news_data]
+        metadata = [{"title": article.get("title", "")} for article in news_data]
+        crew_instance.rag_helper.add("news_collection", documents, metadata)
+ 
+    # Fetch and add gainers/losers to RAG
+    gainers_losers_data = fetch_gainers_losers()
+    if gainers_losers_data:
+        gainers = gainers_losers_data.get("top_gainers", [])
+        documents = [f"{g['ticker']} - ${g['price']} ({g['change_percentage']}%)" for g in gainers]
+        metadata = [{"ticker": g["ticker"], "price": g["price"], "change": g["change_percentage"]} for g in gainers]
+        crew_instance.rag_helper.add("trends_collection", documents, metadata)
+ 
+if st.button("Generate Newsletter"):
+    try:
+        # Query and summarize company insights
+        company_insights = crew_instance.rag_helper.query("news_collection", "latest company news")
+        summarized_company = crew_instance.company_analyst(company_insights) if company_insights else "No company insights available."
+ 
+        # Query and summarize market trends
+        market_trends = crew_instance.rag_helper.query("trends_collection", "latest market trends")
+        summarized_trends = crew_instance.market_trends_analyst(market_trends) if market_trends else "No market trends available."
+ 
+        # Assess risks
+        risks = crew_instance.risk_manager(summarized_company, summarized_trends) if summarized_company and summarized_trends else "No risk analysis available."
+ 
+        # Generate newsletter
+        newsletter = crew_instance.newsletter_generator(summarized_company, summarized_trends, risks)
+        st.markdown(newsletter)
+    except Exception as e:
+        st.error(f"Error generating newsletter: {e}")
