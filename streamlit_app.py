@@ -86,39 +86,8 @@ class RAGHelper:
             st.error(f"Error generating newsletter: {e}")
             return "Newsletter generation failed due to an error."
 
-# Helper Functions for Refinement and Accuracy
-def filter_context(rag_data, keywords):
-    """Filter RAG data for relevance based on specific keywords."""
-    return [item for item in rag_data if any(keyword.lower() in item.lower() for keyword in keywords)]
-
-def refine_newsletter(content):
-    """Refine newsletter content using GPT for better accuracy and clarity."""
-    prompt = f"Refine the following newsletter content to improve accuracy and verifiability:\n\n{content}"
-    try:
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        st.error(f"Error refining newsletter: {e}")
-        return content
-
-def summarize_context_for_claim(rag_context, claim):
-    """Summarize RAG context for better alignment with the claim."""
-    prompt = f"Summarize the following context to match the claim:\n\nClaim:\n{claim}\n\nContext:\n{rag_context}"
-    try:
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        st.error(f"Error summarizing context for claim: {e}")
-        return rag_context
-
+# Accuracy Assessment with Bespoke Labs
 def assess_accuracy_with_bespoke(newsletter_content, rag_context):
-    """Assess the accuracy of the newsletter content using Bespoke Labs."""
     try:
         response = bl.minicheck.factcheck.create(claim=newsletter_content, context=rag_context)
         return round(response.support_prob * 100, 2)  # Convert to percentage
@@ -147,7 +116,7 @@ def fetch_gainers_losers():
         st.error(f"Error fetching gainers and losers: {e}")
         return {}
 
-# Market Newsletter Crew
+# Market Newsletter Crew with Multi-Agent System
 class MarketNewsletterCrew:
     def __init__(self):
         self.rag_helper = RAGHelper(client=st.session_state.chroma_client)
@@ -160,17 +129,29 @@ class MarketNewsletterCrew:
         """Analyze market trends."""
         return self.rag_helper.summarize(task_input, context="market trends")
 
-    def risk_manager(self, company_insights, market_trends):
-        """Evaluate risks based on insights."""
-        prompt_risks = f"Assess risks based on:\n\nCompany Insights:\n{company_insights}\n\nMarket Trends:\n{market_trends}"
-        return self.rag_helper.summarize([prompt_risks], context="risk assessment")
+    def risk_manager(self, task_input):
+        """Evaluate risks based on inputs."""
+        return self.rag_helper.summarize(task_input, context="risk analysis")
 
-    def newsletter_generator(self, company_insights, market_trends, risks):
+    def newsletter_generator(self, inputs):
         """Generate the newsletter."""
+        company_insights, market_trends, risks = inputs
         return self.rag_helper.generate_newsletter(company_insights, market_trends, risks)
 
+    def crew(self):
+        """Define the multi-agent Crew process."""
+        return Crew(
+            agents=[
+                Agent(name="Company Analyst", task=self.company_analyst),
+                Agent(name="Market Trends Analyst", task=self.market_trends_analyst),
+                Agent(name="Risk Manager", task=self.risk_manager),
+                Agent(name="Newsletter Generator", task=self.newsletter_generator),
+            ],
+            process=Process.parallel
+        )
+
 # Streamlit Interface
-st.title("Market Data Newsletter with Accuracy Improvement")
+st.title("Market Data Newsletter with Multi-Agent System")
 
 # Initialize Crew
 crew_instance = MarketNewsletterCrew()
@@ -193,31 +174,21 @@ if st.button("Fetch and Add Data to RAG"):
 
 if st.button("Generate Newsletter"):
     try:
-        # Query and summarize company insights
+        # Query and summarize data
         company_insights = crew_instance.rag_helper.query("news_collection", "latest company news")
-        summarized_company = crew_instance.company_analyst(company_insights)
-
-        # Query and summarize market trends
         market_trends = crew_instance.rag_helper.query("trends_collection", "latest market trends")
-        summarized_trends = crew_instance.market_trends_analyst(market_trends)
 
-        # Assess risks
-        risks = crew_instance.risk_manager(summarized_company, summarized_trends)
-
-        # Generate and refine newsletter
-        newsletter = crew_instance.newsletter_generator(summarized_company, summarized_trends, risks)
-        refined_newsletter = refine_newsletter(newsletter)
-
-        # Filter and summarize context
-        keywords = ["Townsquare", "Intel", "Xerox", "market trends"]
-        filtered_context = filter_context(company_insights + market_trends, keywords)
-        rag_context = summarize_context_for_claim("\n".join(filtered_context[:5]), refined_newsletter)
+        # Use the Crew to process tasks
+        crew = crew_instance.crew()
+        insights = crew.run(inputs=(company_insights, market_trends))
+        summarized_company, summarized_trends, risks, newsletter = insights
 
         # Assess accuracy
-        accuracy_score = assess_accuracy_with_bespoke(refined_newsletter, rag_context)
+        rag_context = "\n".join(company_insights + market_trends)
+        accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
 
         # Display results
-        st.markdown(refined_newsletter)
+        st.markdown(newsletter)
         st.markdown(f"**Accuracy Score:** {accuracy_score}%")
     except Exception as e:
         st.error(f"Error generating newsletter or assessing accuracy: {e}")
