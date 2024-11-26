@@ -10,17 +10,17 @@ from bespokelabs import BespokeLabs
 
 # Explicitly set OpenAI API key
 openai.api_key = st.secrets.get("openai", {}).get("api_key")
-
-# Debugging: Verify the API key is loaded
 if not openai.api_key:
-    st.error("OpenAI API Key is missing. Please set it in the secrets file or as an environment variable.")
+    st.error("OpenAI API Key is missing. Please set it in the secrets file.")
+
+# Initialize Bespoke Labs
+bl = BespokeLabs(auth_token=st.secrets["bespoke_labs"]["api_key"])
+if not bl:
+    st.error("Bespoke Labs API Key is missing. Please set it in the secrets file.")
 
 # Initialize ChromaDB Client
 if "chroma_client" not in st.session_state:
     st.session_state.chroma_client = chromadb.PersistentClient()
-
-# Initialize Bespoke Labs
-bl = BespokeLabs(auth_token=st.secrets["bespoke_labs"]["api_key"])
 
 # Custom RAG Functionality
 class RAGHelper:
@@ -53,7 +53,7 @@ class RAGHelper:
         try:
             input_text = "\n".join(data) if isinstance(data, list) else str(data)
             prompt = f"Summarize the following {context}:\n\n{input_text}\n\nProvide a concise summary."
-            response = openai.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -81,7 +81,7 @@ class RAGHelper:
                 Format it concisely and professionally, focusing on insights.
                 """}
             ]
-            response = openai.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=messages
             )
