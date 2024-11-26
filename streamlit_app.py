@@ -174,6 +174,8 @@ class MarketNewsletterCrew:
 # Streamlit Interface
 st.title("Market Data Newsletter with CrewAI and RAG")
 
+# Initialize Helpers and Crew
+rag_helper = RAGHelper(client=st.session_state.chroma_client)
 crew_instance = MarketNewsletterCrew()
 
 # Fetch and Add Data
