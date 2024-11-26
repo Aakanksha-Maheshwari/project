@@ -15,10 +15,20 @@ openai.api_key = st.secrets["openai"]["api_key"]
 if "chroma_client" not in st.session_state:
     st.session_state.chroma_client = chromadb.PersistentClient()
  
-# Initialize Bespoke Labs
-bl = BespokeLabs(
-    auth_token=st.secrets["bespoke_labs"]["api_key"]
-)
+# BespokeLabs API Setup
+try:
+    bespoke_api_key = st.secrets["bespoke_labs"]["api_key"]
+    st.write("Bespoke API Key Retrieved:", bespoke_api_key)  # Debugging
+    if not bespoke_api_key:
+        st.error("Bespoke API key is missing.")
+    else:
+        bl = BespokeLabs(auth_token=bespoke_api_key)
+        st.success("BespokeLabs client initialized successfully.")
+except KeyError:
+    st.error("Bespoke API key not found in Streamlit secrets.")
+except Exception as e:
+    st.error(f"Error initializing BespokeLabs: {e}")
+
  
 # Custom RAG Functionality
 class RAGHelper:
