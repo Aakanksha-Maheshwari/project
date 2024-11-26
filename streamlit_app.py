@@ -36,14 +36,66 @@ class RAGHelper:
     def add(self, collection_name, documents, metadata):
         try:
             collection = self.client.get_or_create_collection(name=collection_name)
-            collection.add(
-                documents=documents,
-                metadatas=metadata,
-                ids=[str(i) for i in range(len(documents))]
-            )
-            st.success(f"Data successfully added to the '{collection_name}' collection.")
+            if documents and metadata:  # Ensure non-empty lists
+                collection.add(
+                    documents=documents,
+                    metadatas=metadata,
+                    ids=[str(i) for i in range(len(documents))]
+                )
+                st.success(f"Data successfully added to the '{collection_name}' collection.")
+            else:
+                st.warning(f"No valid data to add to '{collection_name}'.")
         except Exception as e:
             st.error(f"Error adding to RAG: {e}")
+
+    def summarize(self, data, context="general insights"):
+        try:
+            input_text = "\n".join(data) if isinstance(data, list) else str(data)
+            prompt = f"Summarize the following {context}:\n\n{input_text}\n\nProvide a concise summary."
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            st.error(f"Error summarizing data: {e}")
+            return "Summary unavailable due to an error."
+
+    def generate_newsletter(self, company_insights, market_trends, risks):
+        try:
+            prompt = f"""
+            Create a detailed daily market newsletter based on the following:
+
+            **Company Insights:**
+            {company_insights}
+
+            **Market Trends:**
+            {market_trends}
+
+            **Risk Analysis:**
+            {risks}
+            """
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            st.error(f"Error generating newsletter: {e}")
+            return "Newsletter generation failed due to an error."
+
+# Bespoke Labs Accuracy Assessment
+def assess_accuracy_with_bespoke(newsletter_content, rag_context):
+    try:
+        context_data = "\n".join(rag_context) if isinstance(rag_context, list) else str(rag_context)
+        response = bl.minicheck.factcheck.create(
+            claim=newsletter_content,
+            context=context_data
+        )
+        return round(response.support_prob * 100, 2)
+    except Exception as e:
+        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
+        return 0
 
 # Fetch Market News
 def fetch_market_news():
@@ -56,11 +108,7 @@ def fetch_market_news():
         }
         response = requests.get("https://www.alphavantage.co/query", params=params)
         response.raise_for_status()
-
-        # Log and return fetched data
-        news_feed = response.json().get("feed", [])
-        st.write("Fetched News Feed:", news_feed)  # Debugging log
-        return news_feed
+        return response.json().get("feed", [])
     except Exception as e:
         st.error(f"Error fetching market news: {e}")
         return []
@@ -74,66 +122,90 @@ def fetch_gainers_losers():
         }
         response = requests.get("https://www.alphavantage.co/query", params=params)
         response.raise_for_status()
-
-        # Log and return fetched data
-        gainers_losers = response.json()
-        st.write("Fetched Gainers and Losers Data:", gainers_losers)  # Debugging log
-        return gainers_losers
+        return response.json()
     except Exception as e:
         st.error(f"Error fetching gainers and losers: {e}")
         return {}
 
-# Initialize RAG Helper
-rag_helper = RAGHelper(client=st.session_state.chroma_client)
+# Market Newsletter Crew
+class MarketNewsletterCrew:
+    def __init__(self):
+        self.rag_helper = RAGHelper(client=st.session_state.chroma_client)
 
-# Fetch and Add Data to RAG
+    def company_analyst(self, task_input):
+        """Analyze company news."""
+        return self.rag_helper.summarize(task_input, context="company insights")
+
+    def market_trends_analyst(self, task_input):
+        """Analyze market trends."""
+        return self.rag_helper.summarize(task_input, context="market trends")
+
+    def risk_manager(self, inputs):
+        """Evaluate risks."""
+        company_insights, market_trends = inputs
+        risks_prompt = f"""
+        Assess risks based on the following:
+
+        **Company Insights:**
+        {company_insights}
+
+        **Market Trends:**
+        {market_trends}
+        """
+        return self.rag_helper.summarize([risks_prompt], context="risk analysis")
+
+    def newsletter_generator(self, inputs):
+        """Generate the newsletter."""
+        company_insights, market_trends, risks = inputs
+        return self.rag_helper.generate_newsletter(company_insights, market_trends, risks)
+
+    def crew(self):
+        """Define the Crew process."""
+        return Crew(
+            agents=[
+                Agent(name="Company Analyst", task=self.company_analyst),
+                Agent(name="Market Trends Analyst", task=self.market_trends_analyst),
+                Agent(name="Risk Manager", task=self.risk_manager),
+                Agent(name="Newsletter Generator", task=self.newsletter_generator),
+            ],
+            process=Process.sequential
+        )
+
+# Streamlit Interface
+st.title("Market Data Newsletter with CrewAI and RAG")
+
+crew_instance = MarketNewsletterCrew()
+
+# Fetch and Add Data
 if st.button("Fetch and Add Data to RAG"):
     news_data = fetch_market_news()
     if news_data:
-        try:
-            # Validate and log fetched news data
-            documents = [article.get("summary", "No summary") for article in news_data]
-            metadata = [{"title": article.get("title", ""), "source": article.get("source", "")} for article in news_data]
-            st.write("News Data to Add to RAG:", documents, metadata)  # Debugging log
-
-            # Add data to RAG
-            rag_helper.add("news_collection", documents, metadata)
-        except Exception as e:
-            st.error(f"Error processing and adding news data: {e}")
+        documents = [article.get("summary", "No summary") for article in news_data]
+        metadata = [{"title": article.get("title", ""), "source": article.get("source", "")} for article in news_data]
+        rag_helper.add("news_collection", documents, metadata)
 
     gainers_losers_data = fetch_gainers_losers()
     if gainers_losers_data:
-        try:
-            # Validate and log fetched gainers/losers data
-            gainers = gainers_losers_data.get("top_gainers", [])
-            documents = [f"{g['ticker']} - ${g['price']} ({g['change_percentage']}%)" for g in gainers]
-            metadata = [{"ticker": g["ticker"], "price": g["price"], "change": g["change_percentage"]} for g in gainers]
-            st.write("Gainers and Losers Data to Add to RAG:", documents, metadata)  # Debugging log
-
-            # Add data to RAG
-            rag_helper.add("trends_collection", documents, metadata)
-        except Exception as e:
-            st.error(f"Error processing and adding gainers/losers data: {e}")
+        gainers = gainers_losers_data.get("top_gainers", [])
+        documents = [f"{g['ticker']} - ${g['price']} ({g['change_percentage']}%)" for g in gainers]
+        metadata = [{"ticker": g["ticker"], "price": g["price"], "change": g["change_percentage"]} for g in gainers]
+        rag_helper.add("trends_collection", documents, metadata)
 
 # Generate Newsletter
 if st.button("Generate Newsletter"):
     try:
         company_insights = rag_helper.query("news_collection", "latest company news")
-        st.write("Queried Company Insights:", company_insights)  # Debugging log
-
         market_trends = rag_helper.query("trends_collection", "latest market trends")
-        st.write("Queried Market Trends:", market_trends)  # Debugging log
 
-        summarized_company = "No company insights available." if not company_insights else company_insights
-        summarized_trends = "No market trends available." if not market_trends else market_trends
+        crew = crew_instance.crew()
+        insights = crew.run(inputs=(company_insights, market_trends))
+        summarized_company, summarized_trends, risks, newsletter = insights
 
-        newsletter = f"""
-        **Company Insights:**
-        {summarized_company}
+        # Assess Bespoke accuracy
+        rag_context = company_insights + market_trends
+        accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
 
-        **Market Trends:**
-        {summarized_trends}
-        """
         st.markdown(newsletter)
+        st.markdown(f"**Accuracy Score:** {accuracy_score}%")
     except Exception as e:
-        st.error(f"Error generating newsletter: {e}")
+        st.error(f"Error generating newsletter or assessing accuracy: {e}")
