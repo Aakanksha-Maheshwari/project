@@ -9,8 +9,8 @@ from crewai import Agent, Crew, Task, Process
 from bespokelabs import BespokeLabs
 
 # Explicitly set OpenAI API key
-openai.api_key = st.secrets.get("openai", {}).get("api_key")
-if not openai.api_key:
+openai_api_key = st.secrets.get("openai", {}).get("api_key")
+if not openai_api_key:
     st.error("OpenAI API Key is missing. Please set it in the secrets file.")
 
 # Initialize Bespoke Labs
@@ -49,19 +49,19 @@ class RAGHelper:
         except Exception as e:
             st.error(f"Error adding to RAG: {e}")
 
-def summarize(self, data, context="general insights"):
-    try:
-        input_text = "\n".join(data) if isinstance(data, list) else str(data)
-        prompt = f"Summarize the following {context}:\n\n{input_text}\n\nProvide a concise summary."
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            api_key=openai.api_key  # Explicitly pass the API key
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        st.error(f"Error summarizing data: {e}")
-        return "Summary unavailable due to an error."
+    def summarize(self, data, context="general insights"):
+        try:
+            input_text = "\n".join(data) if isinstance(data, list) else str(data)
+            prompt = f"Summarize the following {context}:\n\n{input_text}\n\nProvide a concise summary."
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}],
+                api_key=openai_api_key  # Explicitly pass the API key
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            st.error(f"Error summarizing data: {e}")
+            return "Summary unavailable due to an error."
 
     def generate_newsletter(self, company_insights, market_trends, risks):
         try:
@@ -84,7 +84,8 @@ def summarize(self, data, context="general insights"):
             ]
             response = openai.chat.completions.create(
                 model="gpt-4",
-                messages=messages
+                messages=messages,
+                api_key=openai_api_key  # Explicitly pass the API key
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
