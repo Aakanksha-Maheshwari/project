@@ -8,8 +8,12 @@ import requests
 from crewai import Agent, Crew, Task, Process
 from bespokelabs import BespokeLabs
 
-# OpenAI API Key Setup
-openai.api_key = st.secrets["openai"]["api_key"]
+# Explicitly set OpenAI API key
+openai.api_key = st.secrets.get("openai", {}).get("api_key")
+
+# Debugging: Verify the API key is loaded
+if not openai.api_key:
+    st.error("OpenAI API Key is missing. Please set it in the secrets file or as an environment variable.")
 
 # Initialize ChromaDB Client
 if "chroma_client" not in st.session_state:
