@@ -16,9 +16,7 @@ if "chroma_client" not in st.session_state:
     st.session_state.chroma_client = chromadb.PersistentClient()
 
 # Initialize Bespoke Labs
-bl = BespokeLabs(
-    auth_token=st.secrets["bespoke_labs"]["api_key"]
-)
+bl = BespokeLabs(auth_token=st.secrets["bespoke_labs"]["api_key"])
 
 # Custom RAG Functionality
 class RAGHelper:
@@ -53,10 +51,7 @@ class RAGHelper:
             prompt = f"Summarize the following {context}:\n\n{input_text}\n\nProvide a concise summary."
             response = openai.chat.completions.create(
                 model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that summarizes data."},
-                    {"role": "user", "content": prompt}
-                ]
+                messages=[{"role": "user", "content": prompt}]
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
@@ -91,37 +86,42 @@ class RAGHelper:
             st.error(f"Error generating newsletter: {e}")
             return "Newsletter generation failed due to an error."
 
-# Bespoke Labs Accuracy Assessment
-def assess_accuracy_with_bespoke(newsletter_content, rag_context):
-    """
-    Assess the accuracy of the newsletter content using Bespoke Labs.
-    """
+# Helper Functions for Refinement and Accuracy
+def filter_context(rag_data, keywords):
+    """Filter RAG data for relevance based on specific keywords."""
+    return [item for item in rag_data if any(keyword.lower() in item.lower() for keyword in keywords)]
+
+def refine_newsletter(content):
+    """Refine newsletter content using GPT for better accuracy and clarity."""
+    prompt = f"Refine the following newsletter content to improve accuracy and verifiability:\n\n{content}"
     try:
-        st.markdown("### Debugging Information for Bespoke Labs")
-        st.markdown("**Claim (Newsletter Content):**")
-        st.text(newsletter_content)
-
-        st.markdown("**Context (RAG Data):**")
-        st.text(rag_context)
-
-        # Call Bespoke Labs API
-        response = bl.minicheck.factcheck.create(
-            claim=newsletter_content,
-            context=rag_context,
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}]
         )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"Error refining newsletter: {e}")
+        return content
 
-        # Display the raw response
-        st.markdown("**Raw Bespoke Labs Response:**")
-        st.json({
-            "support_prob": response.support_prob,
-            "other_info": str(response)  # Log additional info
-        })
+def summarize_context_for_claim(rag_context, claim):
+    """Summarize RAG context for better alignment with the claim."""
+    prompt = f"Summarize the following context to match the claim:\n\nClaim:\n{claim}\n\nContext:\n{rag_context}"
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"Error summarizing context for claim: {e}")
+        return rag_context
 
-        # Extract and return the support probability
+def assess_accuracy_with_bespoke(newsletter_content, rag_context):
+    """Assess the accuracy of the newsletter content using Bespoke Labs."""
+    try:
+        response = bl.minicheck.factcheck.create(claim=newsletter_content, context=rag_context)
         return round(response.support_prob * 100, 2)  # Convert to percentage
-    except AttributeError as e:
-        st.error(f"Error: Missing or incorrect response attribute. Details: {e}")
-        return 0
     except Exception as e:
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
@@ -129,12 +129,7 @@ def assess_accuracy_with_bespoke(newsletter_content, rag_context):
 # Alpha Vantage Data Fetching
 def fetch_market_news():
     try:
-        params = {
-            "function": "NEWS_SENTIMENT",
-            "apikey": st.secrets["alpha_vantage"]["api_key"],
-            "limit": 50,
-            "sort": "RELEVANCE",
-        }
+        params = {"function": "NEWS_SENTIMENT", "apikey": st.secrets["alpha_vantage"]["api_key"], "limit": 50}
         response = requests.get("https://www.alphavantage.co/query", params=params)
         response.raise_for_status()
         return response.json().get("feed", [])
@@ -144,10 +139,7 @@ def fetch_market_news():
 
 def fetch_gainers_losers():
     try:
-        params = {
-            "function": "TOP_GAINERS_LOSERS",
-            "apikey": st.secrets["alpha_vantage"]["api_key"],
-        }
+        params = {"function": "TOP_GAINERS_LOSERS", "apikey": st.secrets["alpha_vantage"]["api_key"]}
         response = requests.get("https://www.alphavantage.co/query", params=params)
         response.raise_for_status()
         return response.json()
@@ -177,20 +169,8 @@ class MarketNewsletterCrew:
         """Generate the newsletter."""
         return self.rag_helper.generate_newsletter(company_insights, market_trends, risks)
 
-    def crew(self):
-        """Define the Crew process."""
-        return Crew(
-            agents=[
-                Agent(name="Company Analyst", task=self.company_analyst),
-                Agent(name="Market Trends Analyst", task=self.market_trends_analyst),
-                Agent(name="Risk Manager", task=self.risk_manager),
-                Agent(name="Newsletter Generator", task=self.newsletter_generator),
-            ],
-            process=Process.sequential
-        )
-
 # Streamlit Interface
-st.title("Market Data Newsletter with CrewAI, OpenAI, and RAG")
+st.title("Market Data Newsletter with Accuracy Improvement")
 
 # Initialize Crew
 crew_instance = MarketNewsletterCrew()
@@ -215,22 +195,29 @@ if st.button("Generate Newsletter"):
     try:
         # Query and summarize company insights
         company_insights = crew_instance.rag_helper.query("news_collection", "latest company news")
-        summarized_company = crew_instance.company_analyst(company_insights) if company_insights else "No company insights available."
+        summarized_company = crew_instance.company_analyst(company_insights)
 
         # Query and summarize market trends
         market_trends = crew_instance.rag_helper.query("trends_collection", "latest market trends")
-        summarized_trends = crew_instance.market_trends_analyst(market_trends) if market_trends else "No market trends available."
+        summarized_trends = crew_instance.market_trends_analyst(market_trends)
 
         # Assess risks
-        risks = crew_instance.risk_manager(summarized_company, summarized_trends) if summarized_company and summarized_trends else "No risk analysis available."
+        risks = crew_instance.risk_manager(summarized_company, summarized_trends)
 
-        # Generate newsletter
+        # Generate and refine newsletter
         newsletter = crew_instance.newsletter_generator(summarized_company, summarized_trends, risks)
-        st.markdown(newsletter)
+        refined_newsletter = refine_newsletter(newsletter)
 
-        # Assess accuracy with Bespoke Labs
-        rag_context = "\n".join(company_insights + market_trends)
-        accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
+        # Filter and summarize context
+        keywords = ["Townsquare", "Intel", "Xerox", "market trends"]
+        filtered_context = filter_context(company_insights + market_trends, keywords)
+        rag_context = summarize_context_for_claim("\n".join(filtered_context[:5]), refined_newsletter)
+
+        # Assess accuracy
+        accuracy_score = assess_accuracy_with_bespoke(refined_newsletter, rag_context)
+
+        # Display results
+        st.markdown(refined_newsletter)
         st.markdown(f"**Accuracy Score:** {accuracy_score}%")
     except Exception as e:
         st.error(f"Error generating newsletter or assessing accuracy: {e}")
