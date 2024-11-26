@@ -6,6 +6,7 @@ import chromadb
 import openai
 import requests
 from crewai import Agent, Crew, Task, Process
+from bespokelabs import BespokeLabs
  
 # OpenAI API Key Setup
 openai.api_key = st.secrets["openai"]["api_key"]
@@ -13,14 +14,11 @@ openai.api_key = st.secrets["openai"]["api_key"]
 # Initialize ChromaDB Client
 if "chroma_client" not in st.session_state:
     st.session_state.chroma_client = chromadb.PersistentClient()
-
-# BespokeLabs API Setup
-bespoke_api_key = st.secrets["bespoke_labs"]["api_key"]  # Access from Streamlit secrets
-if not bespoke_api_key:
-    st.error("Bespoke API key is missing. Please set it in the [bespoke_labs] section of your secrets.")
-else:
-    bl = BespokeLabs(auth_token=bespoke_api_key)
-
+ 
+# Initialize Bespoke Labs
+bl = BespokeLabs(
+    auth_token=st.secrets["bespoke_labs"]["api_key"]
+)
  
 # Custom RAG Functionality
 class RAGHelper:
@@ -92,6 +90,41 @@ class RAGHelper:
         except Exception as e:
             st.error(f"Error generating newsletter: {e}")
             return "Newsletter generation failed due to an error."
+ 
+# Bespoke Labs Accuracy Assessment
+def assess_accuracy_with_bespoke(newsletter_content, rag_context):
+    """
+    Assess the accuracy of the newsletter content using Bespoke Labs.
+    """
+    try:
+        st.markdown("### Debugging Information for Bespoke Labs")
+        st.markdown("**Claim (Newsletter Content):**")
+        st.text(newsletter_content)
+ 
+        st.markdown("**Context (RAG Data):**")
+        st.text(rag_context)
+ 
+        # Call Bespoke Labs API
+        response = bl.minicheck.factcheck.create(
+            claim=newsletter_content,
+            context=rag_context,
+        )
+ 
+        # Display the raw response
+        st.markdown("**Raw Bespoke Labs Response:**")
+        st.json({
+            "support_prob": response.support_prob,
+            "other_info": str(response)  # Log additional info
+        })
+ 
+        # Extract and return the support probability
+        return round(response.support_prob * 100, 2)  # Convert to percentage
+    except AttributeError as e:
+        st.error(f"Error: Missing or incorrect response attribute. Details: {e}")
+        return 0
+    except Exception as e:
+        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
+        return 0
  
 # Alpha Vantage Data Fetching
 def fetch_market_news():
@@ -194,5 +227,10 @@ if st.button("Generate Newsletter"):
         # Generate newsletter
         newsletter = crew_instance.newsletter_generator(summarized_company, summarized_trends, risks)
         st.markdown(newsletter)
+ 
+        # Assess accuracy with Bespoke Labs
+        rag_context = "\n".join(company_insights + market_trends)
+        accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
+        st.markdown(f"**Accuracy Score:** {accuracy_score}%")
     except Exception as e:
-        st.error(f"Error generating newsletter: {e}")
+        st.error(f"Error generating newsletter or assessing accuracy: {e}")
