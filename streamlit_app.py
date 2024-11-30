@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import json
 import openai
-from crewai import Agent
+from crewai import Agent,Task, Crew
 import streamlit as st
 import requests
 import json
@@ -12,32 +12,28 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 from chromadb.config import Settings
 
-# Initialize ChromaDB Persistent Client
-client = chromadb.PersistentClient()
-
 # Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
-
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Alpha Vantage Multi-Agent RAG System")
+st.title("Alpha Vantage Multi-Agent RAG System with Crew AI")
 
 # Sidebar options
 st.sidebar.header("Options")
 option = st.sidebar.radio(
     "Choose an action:",
-    ["Load News Data", "Retrieve News Data", "Load Ticker Trends Data", "Retrieve Ticker Trends Data", "Generate Newsletter"]
+    ["Generate Newsletter"]
 )
 
 ### Define Agents ###
 
 # Company Analyst Agent
-class CompanyAnalystAgent:
+class CompanyAnalystAgent(Agent):
     def handle(self):
         response = requests.get(news_url)
         response.raise_for_status()
@@ -51,8 +47,9 @@ class CompanyAnalystAgent:
             return {"company_news": company_news[:5]}  # Limit to top 5 news for efficiency
         return {"company_news": []}
 
+
 # Market Trends Analyst Agent
-class MarketTrendsAnalystAgent:
+class MarketTrendsAnalystAgent(Agent):
     def handle(self):
         response = requests.get(tickers_url)
         response.raise_for_status()
@@ -68,25 +65,42 @@ class MarketTrendsAnalystAgent:
             }
         return {"market_trends": {}}
 
+
 # Risk Management Analyst Agent
-class RiskManagementAnalystAgent:
-    def handle(self):
-        risks = [
-            "High volatility in technology stocks.",
-            "Potential downturn in global markets due to geopolitical tensions.",
-        ]
-        strategies = ["Consider hedging with options.", "Diversify portfolio."]
+class RiskManagementAnalystAgent(Agent):
+    def __init__(self):
+        self.market_trends = None
+
+    def handle(self, inputs):
+        market_trends = inputs.get("market_trends", {})
+        risks = []
+        strategies = []
+
+        if market_trends.get("top_gainers"):
+            risks.append("Potential overvaluation in top gainers.")
+        if market_trends.get("top_losers"):
+            risks.append("Significant risks in top losers.")
+
+        strategies.append("Diversify investments to reduce risk.")
+        strategies.append("Focus on long-term trends for stability.")
+
         return {"risks": risks, "strategies": strategies}
 
-# Newsletter Generator Agent
-class NewsletterGeneratorAgent:
-    def __init__(self, company_news, market_trends, risks, strategies):
-        self.company_news = company_news
-        self.market_trends = market_trends
-        self.risks = risks
-        self.strategies = strategies
 
-    def handle(self):
+# Newsletter Generator Agent
+class NewsletterGeneratorAgent(Agent):
+    def __init__(self):
+        self.company_news = None
+        self.market_trends = None
+        self.risks = None
+        self.strategies = None
+
+    def handle(self, inputs):
+        self.company_news = inputs.get("company_news", [])
+        self.market_trends = inputs.get("market_trends", {})
+        self.risks = inputs.get("risks", [])
+        self.strategies = inputs.get("strategies", [])
+
         input_text = f"""
         Company News: {json.dumps(self.company_news, indent=2)}
         Market Trends:
@@ -96,11 +110,10 @@ class NewsletterGeneratorAgent:
         Risks: {json.dumps(self.risks, indent=2)}
         Strategies: {json.dumps(self.strategies, indent=2)}
         """
-        
+
         try:
-            # Use OpenAI's Chat API
             response = openai.chat.completions.create(
-                model="gpt-4o-mini",  # Adjust model as per your access level
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant summarizing financial data into a concise newsletter."},
                     {"role": "user", "content": f"Summarize the following data into a newsletter:\n{input_text}"}
@@ -112,65 +125,64 @@ class NewsletterGeneratorAgent:
         except Exception as e:
             return {"error": f"Failed to generate newsletter: {str(e)}"}
 
-### Streamlit Functions ###
 
-def generate_newsletter_with_agents():
-    st.write("### Generating Newsletter with Multi-Agent System")
+### Define Tasks ###
+company_task = Task(
+    description="Analyze company-related news.",
+    expected_output="Company news insights",
+    agent=CompanyAnalystAgent(),
+)
 
-    # Instantiate and run agents manually
-    company_analyst = CompanyAnalystAgent()
-    market_trends_analyst = MarketTrendsAnalystAgent()
-    risk_management_analyst = RiskManagementAnalystAgent()
+market_trends_task = Task(
+    description="Analyze market trends.",
+    expected_output="Market trends insights",
+    agent=MarketTrendsAnalystAgent(),
+)
 
-    # Collect results from agents
-    company_news_result = company_analyst.handle()
-    market_trends_result = market_trends_analyst.handle()
-    risk_management_result = risk_management_analyst.handle()
+risk_task = Task(
+    description="Perform risk analysis based on market trends.",
+    expected_output="Risk analysis and mitigation strategies",
+    agent=RiskManagementAnalystAgent(),
+    context=[market_trends_task],
+)
 
-    # Use the results in the Newsletter Generator Agent
-    newsletter_agent = NewsletterGeneratorAgent(
-        company_news=company_news_result["company_news"],
-        market_trends=market_trends_result["market_trends"],
-        risks=risk_management_result["risks"],
-        strategies=risk_management_result["strategies"]
-    )
-    newsletter_result = newsletter_agent.handle()
+newsletter_task = Task(
+    description="Generate a newsletter summarizing all data.",
+    expected_output="A concise financial newsletter",
+    agent=NewsletterGeneratorAgent(),
+    context=[company_task, market_trends_task, risk_task],
+)
 
-    # Display the generated newsletter or handle errors
-    if "error" in newsletter_result:
-        st.error(newsletter_result["error"])
-    else:
-        st.subheader("Generated Newsletter")
-        st.text(newsletter_result["newsletter"])
+### Assemble the Crew ###
+my_crew = Crew(
+    agents=[
+        company_task.agent,
+        market_trends_task.agent,
+        risk_task.agent,
+        newsletter_task.agent,
+    ],
+    tasks=[company_task, market_trends_task, risk_task, newsletter_task],
+)
 
-# Function to Load News Data
-def load_news_data():
-    # Implementation remains the same as your original function
-    ...
+### Streamlit Function ###
+def generate_newsletter():
+    st.write("### Generating Newsletter")
 
-# Function to Retrieve News Data
-def retrieve_news_data():
-    # Implementation remains the same as your original function
-    ...
+    try:
+        # Run the Crew AI tasks
+        results = my_crew.kickoff(inputs={})
 
-# Function to Load Ticker Trends Data
-def load_ticker_trends_data():
-    # Implementation remains the same as your original function
-    ...
+        # Display the newsletter
+        newsletter = results["newsletter_task"]
+        if "error" in newsletter:
+            st.error(newsletter["error"])
+        else:
+            st.subheader("Generated Newsletter")
+            st.text(newsletter["newsletter"])
+    except Exception as e:
+        st.error(f"Failed to run crew tasks: {e}")
 
-# Function to Retrieve Ticker Trends Data
-def retrieve_ticker_trends_data():
-    # Implementation remains the same as your original function
-    ...
 
 ### Main Logic ###
-if option == "Load News Data":
-    load_news_data()
-elif option == "Retrieve News Data":
-    retrieve_news_data()
-elif option == "Load Ticker Trends Data":
-    load_ticker_trends_data()
-elif option == "Retrieve Ticker Trends Data":
-    retrieve_ticker_trends_data()
-elif option == "Generate Newsletter":
-    generate_newsletter_with_agents()
+if option == "Generate Newsletter":
+    generate_newsletter()
