@@ -19,12 +19,13 @@ client = chromadb.PersistentClient()
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
 
+
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Alpha Vantage Multi-Agent RAG System with Crew AI")
+st.title("Alpha Vantage Multi-Agent RAG System")
 
 # Sidebar options
 st.sidebar.header("Options")
@@ -33,10 +34,10 @@ option = st.sidebar.radio(
     ["Load News Data", "Retrieve News Data", "Load Ticker Trends Data", "Retrieve Ticker Trends Data", "Generate Newsletter"]
 )
 
-### Define Crew AI Agents ###
+### Define Agents ###
 
 # Company Analyst Agent
-class CompanyAnalystAgent(Agent):
+class CompanyAnalystAgent:
     def handle(self):
         response = requests.get(news_url)
         response.raise_for_status()
@@ -51,7 +52,7 @@ class CompanyAnalystAgent(Agent):
         return {"company_news": []}
 
 # Market Trends Analyst Agent
-class MarketTrendsAnalystAgent(Agent):
+class MarketTrendsAnalystAgent:
     def handle(self):
         response = requests.get(tickers_url)
         response.raise_for_status()
@@ -68,7 +69,7 @@ class MarketTrendsAnalystAgent(Agent):
         return {"market_trends": {}}
 
 # Risk Management Analyst Agent
-class RiskManagementAnalystAgent(Agent):
+class RiskManagementAnalystAgent:
     def handle(self):
         risks = [
             "High volatility in technology stocks.",
@@ -78,7 +79,7 @@ class RiskManagementAnalystAgent(Agent):
         return {"risks": risks, "strategies": strategies}
 
 # Newsletter Generator Agent
-class NewsletterGeneratorAgent(Agent):
+class NewsletterGeneratorAgent:
     def __init__(self, company_news, market_trends, risks, strategies):
         self.company_news = company_news
         self.market_trends = market_trends
@@ -111,35 +112,29 @@ class NewsletterGeneratorAgent(Agent):
         except Exception as e:
             return {"error": f"Failed to generate newsletter: {str(e)}"}
 
-### Crew AI Multi-Agent System ###
-system = System()
-system.add_agent("company_analyst", CompanyAnalystAgent())
-system.add_agent("market_trends_analyst", MarketTrendsAnalystAgent())
-system.add_agent("risk_management_analyst", RiskManagementAnalystAgent())
-
 ### Streamlit Functions ###
 
 def generate_newsletter_with_agents():
     st.write("### Generating Newsletter with Multi-Agent System")
 
-    # Run the first three agents concurrently
-    results = system.run_all()
+    # Instantiate and run agents manually
+    company_analyst = CompanyAnalystAgent()
+    market_trends_analyst = MarketTrendsAnalystAgent()
+    risk_management_analyst = RiskManagementAnalystAgent()
 
-    # Extract data from agent results
-    company_news = results["company_analyst"]["company_news"]
-    market_trends = results["market_trends_analyst"]["market_trends"]
-    risks = results["risk_management_analyst"]["risks"]
-    strategies = results["risk_management_analyst"]["strategies"]
+    # Collect results from agents
+    company_news_result = company_analyst.handle()
+    market_trends_result = market_trends_analyst.handle()
+    risk_management_result = risk_management_analyst.handle()
 
-    # Create and run the Newsletter Generator Agent
+    # Use the results in the Newsletter Generator Agent
     newsletter_agent = NewsletterGeneratorAgent(
-        company_news=company_news,
-        market_trends=market_trends,
-        risks=risks,
-        strategies=strategies
+        company_news=company_news_result["company_news"],
+        market_trends=market_trends_result["market_trends"],
+        risks=risk_management_result["risks"],
+        strategies=risk_management_result["strategies"]
     )
-    system.add_agent("newsletter_generator", newsletter_agent)
-    newsletter_result = system.run("newsletter_generator")
+    newsletter_result = newsletter_agent.handle()
 
     # Display the generated newsletter or handle errors
     if "error" in newsletter_result:
