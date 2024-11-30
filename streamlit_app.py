@@ -108,7 +108,7 @@ class NewsletterGeneratorAgent:
                 max_tokens=1500,
                 temperature=0.7
             )
-            return {"newsletter": response.choices[0].message["content"].strip()}
+            return {"newsletter": response.choices[0].message.content.strip()}
         except Exception as e:
             return {"error": f"Failed to generate newsletter: {str(e)}"}
 
