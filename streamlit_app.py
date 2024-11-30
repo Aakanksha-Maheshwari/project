@@ -2,11 +2,10 @@ import streamlit as st
 import requests
 import json
 import openai
-from crew import Agent, System
+from crewai import Agent
 
 # ChromaDB imports
 import chromadb
-from chromadb.config import Settings
 
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
