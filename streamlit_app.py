@@ -2,13 +2,12 @@ import streamlit as st
 import requests
 import json
 import openai
-import chromadb
-from chromadb.config import Settings
-
 # Import pysqlite3 for chromadb compatibility
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+import chromadb
+from chromadb.config import Settings
 
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
