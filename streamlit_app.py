@@ -18,7 +18,6 @@ bespoke_key = st.secrets["bespoke_labs"]["api_key"]
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
-bespoke_api_url = "https://api.bespokelabs.ai/minicheck"
 
 # Streamlit App Title
 st.title("Alpha Vantage Multi-Agent System with RAG, GPT-4, and Bespoke Labs")
@@ -86,7 +85,7 @@ def retrieve_from_chromadb(collection_name, query, top_k=5):
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
     try:
-        response = openai.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
@@ -100,11 +99,11 @@ def call_openai_gpt4(prompt):
         return f"Error generating response: {str(e)}"
 
 def measure_newsletter_accuracy(context, claim):
-    """Use Bespoke Labs API to measure the accuracy of the newsletter."""
+    """Measure the accuracy of the newsletter using Bespoke Labs API."""
     try:
         payload = {"context": context, "claim": claim}
         headers = {"Authorization": f"Bearer {bespoke_key}"}
-        response = requests.post(bespoke_api_url, json=payload, headers=headers)
+        response = requests.post("https://api.bespokelabs.ai/minicheck", json=payload, headers=headers)
         response.raise_for_status()
         result = response.json()
         st.write("Bespoke API Response:", result)  # Debugging
