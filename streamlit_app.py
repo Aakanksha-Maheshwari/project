@@ -2,12 +2,7 @@ import streamlit as st
 import requests
 import json
 import openai
-import os
-from bespokelabs import curator
-from pydantic import BaseModel, Field
-from typing import List
-from datasets import Dataset
-
+from bespokelabs import BespokeLabs
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -19,14 +14,17 @@ client = chromadb.PersistentClient()
 # Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
+bespoke_key = st.secrets["bespoke_labs"]["api_key"]
+
+# Initialize Bespoke Labs
+bl = BespokeLabs(auth_token=bespoke_key)
+
+# API URLs for Alpha Vantage
+news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
+tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("RAG + GPT-4 + Curator Pipeline for Newsletter Generation and Accuracy Check")
-
-### Helper Classes ###
-class ClaimContext(BaseModel):
-    claim: str = Field(description="Generated newsletter content")
-    context: str = Field(description="RAG-based extracted data")
+st.title("Alpha Vantage Multi-Agent System with RAG, OpenAI GPT-4, and Bespoke Labs")
 
 ### Helper Functions ###
 def update_chromadb(collection_name, data):
@@ -42,7 +40,6 @@ def update_chromadb(collection_name, data):
 def fetch_and_update_news_data():
     """Fetch news data from the API and update ChromaDB."""
     try:
-        news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
         response = requests.get(news_url)
         response.raise_for_status()
         data = response.json()
@@ -58,7 +55,6 @@ def fetch_and_update_news_data():
 def fetch_and_update_ticker_trends_data():
     """Fetch ticker trends data from the API and update ChromaDB."""
     try:
-        tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
         response = requests.get(tickers_url)
         response.raise_for_status()
         data = response.json()
@@ -89,62 +85,68 @@ def retrieve_from_chromadb(collection_name, query, top_k=5):
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
-### Curator Integration ###
-def generate_newsletter_with_curator():
-    """Generate newsletter using Curator and measure accuracy."""
-    # Step 1: Fetch and process RAG-based data
-    rag_data = retrieve_from_chromadb("news_sentiment_data", "Extract news insights", top_k=5)
-    if not rag_data:
-        st.error("No RAG data available.")
+def call_openai_gpt4(prompt):
+    """Call OpenAI GPT-4 to process the prompt."""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"Error calling OpenAI GPT-4: {e}")
+        return "Error generating response."
+
+### Bespoke Labs Accuracy Assessment ###
+def assess_accuracy_with_bespoke(newsletter, rag_data):
+    """Assess the accuracy of the newsletter using Bespoke Labs."""
+    try:
+        response = bl.minicheck.factcheck.create(
+            claim=newsletter,
+            context=json.dumps(rag_data)
+        )
+        support_prob = response.get("support_prob", 0)
+        st.write("Bespoke Labs Response:", response)  # Debugging
+        return round(support_prob * 100, 2)  # Convert to percentage
+    except Exception as e:
+        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
+        return 0
+
+### Newsletter Generation ###
+def generate_newsletter_with_accuracy():
+    """Generate the newsletter using RAG and measure its accuracy."""
+    # Retrieve RAG data
+    company_insights = retrieve_from_chromadb("news_sentiment_data", "Extract insights from news", top_k=5)
+    market_trends = retrieve_from_chromadb("ticker_trends_data", "Analyze market trends", top_k=5)
+
+    if not company_insights or not market_trends:
+        st.error("Insufficient RAG data for newsletter generation.")
         return
-    
-    st.write("RAG Data Retrieved:", rag_data)
 
-    # Step 2: Create synthetic dataset for newsletter generation
-    dataset = Dataset.from_dict({"context": [json.dumps(rag_data)]})
+    # Summarize RAG data
+    summarized_insights = call_openai_gpt4(f"Summarize the following company insights:\n{company_insights}")
+    summarized_trends = call_openai_gpt4(f"Summarize the following market trends:\n{market_trends}")
 
-    # Step 3: Define Curator pipeline
-    class Newsletter(BaseModel):
-        text: str = Field(description="Generated newsletter text")
+    # Generate newsletter
+    prompt = f"""
+    Generate a professional newsletter based on the following:
+    Company Insights:
+    {summarized_insights}
 
-    newsletter_generator = curator.Prompter(
-        prompt_func=lambda row: f"Write a newsletter based on the following context:\n{row['context']}",
-        model_name="gpt-4o-mini",
-        response_format=Newsletter,
-        parse_func=lambda row, result: [{"context": row["context"], "newsletter": result.text}],
-    )
-
-    # Step 4: Generate Newsletter
-    synthetic_data = newsletter_generator(dataset)
-    st.write("Generated Newsletter Dataset:", synthetic_data)
-
-    if not synthetic_data:
-        st.error("Newsletter generation failed.")
-        return
-
-    generated_newsletter = synthetic_data[0]["newsletter"]
-
-    # Step 5: Measure Accuracy using Curator and Pydantic
-    context = json.dumps(rag_data)
-    claim = generated_newsletter
-
-    accuracy_pipeline = curator.Prompter(
-        prompt_func=lambda row: f"Measure the accuracy of the following claim:\nClaim: {row['claim']}\nContext: {row['context']}",
-        model_name="gpt-4o-mini",
-        response_format=ClaimContext,
-        parse_func=lambda row, result: [{"claim": row["claim"], "accuracy": result.claim}],
-    )
-
-    accuracy_data = Dataset.from_dict({"claim": [claim], "context": [context]})
-    accuracy_result = accuracy_pipeline(accuracy_data)
-
-    st.write("Accuracy Measurement:", accuracy_result)
-
+    Market Trends:
+    {summarized_trends}
+    """
+    newsletter = call_openai_gpt4(prompt)
     st.subheader("Generated Newsletter")
-    st.markdown(generated_newsletter)
+    st.markdown(newsletter)
 
-    if accuracy_result:
-        st.success(f"Measured Accuracy: {accuracy_result[0]['accuracy']}")
+    # Assess accuracy
+    rag_context = company_insights + market_trends
+    accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
+    st.success(f"Newsletter Accuracy: {accuracy_score}%")
 
 ### Main Page Buttons ###
 if st.button("Fetch and Store News Data"):
@@ -154,4 +156,4 @@ if st.button("Fetch and Store Trends Data"):
     fetch_and_update_ticker_trends_data()
 
 if st.button("Generate Newsletter and Measure Accuracy"):
-    generate_newsletter_with_curator()
+    generate_newsletter_with_accuracy()
