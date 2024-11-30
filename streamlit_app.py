@@ -10,27 +10,22 @@ __import__('pysqlite3')
 import sys,os
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
-from chromadb.config import Settings
-
-import os
-import streamlit as st
-import requests
-import json
-import openai
-from crewai import Agent, Task, Crew
-import chromadb
-from chromadb.config import Settings
+import yaml
 
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
+
+# Load Agent Configurations
+with open("agents.yaml", "r") as f:
+    agents_config = yaml.safe_load(f)
 
 # Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai_api_key = st.secrets["openai"]["api_key"]
 
-# Set OpenAI API key for the library and environment
+# Set OpenAI API Key
 openai.api_key = openai_api_key
-os.environ["OPENAI_API_KEY"] = openai_api_key  # Ensure compatibility with OpenAI library
+os.environ["OPENAI_API_KEY"] = openai_api_key
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
@@ -39,7 +34,7 @@ tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 # Streamlit App Title
 st.title("Alpha Vantage Multi-Agent RAG System")
 
-# Sidebar options
+# Sidebar Options
 st.sidebar.header("Options")
 option = st.sidebar.radio(
     "Choose an action:",
@@ -47,219 +42,79 @@ option = st.sidebar.radio(
 )
 
 ### Define Agents ###
+news_loader = Agent(
+    role=agents_config["news_loader"]["role"],
+    goal=agents_config["news_loader"]["goal"],
+    backstory=agents_config["news_loader"]["backstory"]
+)
 
-# Agent to load and store news data
-class NewsDataAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            role="News Loader",
-            goal="Load and store news data from Alpha Vantage.",
-            backstory="This agent retrieves news data and stores it in ChromaDB for further analysis."
-        )
+ticker_loader = Agent(
+    role=agents_config["ticker_loader"]["role"],
+    goal=agents_config["ticker_loader"]["goal"],
+    backstory=agents_config["ticker_loader"]["backstory"]
+)
 
-    def handle(self):
-        news_collection = client.get_or_create_collection("news_sentiment_data")
-        try:
-            response = requests.get(news_url)
-            response.raise_for_status()
-            data = response.json()
+summarizer = Agent(
+    role=agents_config["summarizer"]["role"],
+    goal=agents_config["summarizer"]["goal"],
+    backstory=agents_config["summarizer"]["backstory"]
+)
 
-            if "feed" in data:
-                for i, item in enumerate(data["feed"], start=1):
-                    document = {
-                        "id": str(i),
-                        "title": item["title"],
-                        "url": item["url"],
-                        "time_published": item["time_published"],
-                        "source": item["source"],
-                        "summary": item.get("summary", "N/A"),
-                        "topics": [topic["topic"] for topic in item.get("topics", [])],
-                        "overall_sentiment_label": item.get("overall_sentiment_label", "N/A"),
-                        "overall_sentiment_score": item.get("overall_sentiment_score", "N/A"),
-                        "ticker_sentiments": [
-                            {
-                                "ticker": ticker["ticker"],
-                                "relevance_score": ticker["relevance_score"],
-                                "ticker_sentiment_label": ticker["ticker_sentiment_label"],
-                                "ticker_sentiment_score": ticker["ticker_sentiment_score"],
-                            }
-                            for ticker in item.get("ticker_sentiment", [])
-                        ],
-                    }
-                    topics_str = ", ".join(document["topics"])
-                    ticker_sentiments_str = json.dumps(document["ticker_sentiments"])
-
-                    news_collection.add(
-                        ids=[document["id"]],
-                        metadatas=[{
-                            "source": document["source"],
-                            "time_published": document["time_published"],
-                            "topics": topics_str,
-                            "overall_sentiment": document["overall_sentiment_label"],
-                            "ticker_sentiments": ticker_sentiments_str,
-                        }],
-                        documents=[json.dumps(document)]
-                    )
-                return {"status": "News data loaded successfully"}
-            return {"status": "No news data found"}
-        except requests.exceptions.RequestException as e:
-            return {"error": f"API call failed: {e}"}
-        except Exception as e:
-            return {"error": f"Unexpected error: {e}"}
-
-
-# Agent to load and store ticker trends data
-class TickerTrendsAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            role="Ticker Trends Loader",
-            goal="Load and store ticker trends data from Alpha Vantage.",
-            backstory="This agent retrieves ticker trends data and stores it in ChromaDB for further analysis."
-        )
-
-    def handle(self):
-        ticker_collection = client.get_or_create_collection("ticker_trends_data")
-        try:
-            response = requests.get(tickers_url)
-            response.raise_for_status()
-            data = response.json()
-
-            if "top_gainers" in data:
-                ticker_collection.add(
-                    ids=["top_gainers"],
-                    metadatas=[{"type": "top_gainers"}],
-                    documents=[json.dumps(data["top_gainers"])],
-                )
-                ticker_collection.add(
-                    ids=["top_losers"],
-                    metadatas=[{"type": "top_losers"}],
-                    documents=[json.dumps(data["top_losers"])],
-                )
-                ticker_collection.add(
-                    ids=["most_actively_traded"],
-                    metadatas=[{"type": "most_actively_traded"}],
-                    documents=[json.dumps(data["most_actively_traded"])],
-                )
-                return {"status": "Ticker trends data loaded successfully"}
-            return {"status": "No ticker trends data found"}
-        except requests.exceptions.RequestException as e:
-            return {"error": f"API call failed: {e}"}
-        except Exception as e:
-            return {"error": f"Unexpected error: {e}"}
-
-
-# Agent to retrieve data from ChromaDB and summarize
-class DataSummarizationAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            role="Data Summarizer",
-            goal="Retrieve and summarize data from ChromaDB.",
-            backstory="This agent processes stored data to prepare it for newsletter generation."
-        )
-
-    def handle(self, inputs):
-        news_collection = client.get_or_create_collection("news_sentiment_data")
-        ticker_collection = client.get_or_create_collection("ticker_trends_data")
-        try:
-            news_results = news_collection.get()
-            news_data = [json.loads(doc) for doc in news_results["documents"]]
-            ticker_data = {}
-            for data_type in ["top_gainers", "top_losers", "most_actively_traded"]:
-                results = ticker_collection.get(ids=[data_type])
-                ticker_data[data_type] = json.loads(results["documents"][0])
-
-            combined_data = {
-                "news": news_data[:10],
-                "tickers": ticker_data
-            }
-            return {"combined_data": combined_data}
-        except Exception as e:
-            return {"error": f"Error retrieving data: {e}"}
-
-
-# Agent to generate a newsletter
-class NewsletterAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            role="Newsletter Generator",
-            goal="Generate a concise newsletter summarizing market data.",
-            backstory="This agent creates newsletters summarizing market trends and news."
-        )
-
-    def handle(self, inputs):
-        combined_data = inputs.get("combined_data", {})
-        news_data = combined_data.get("news", [])
-        tickers = combined_data.get("tickers", {})
-        input_text = f"""
-        News Data: {json.dumps(news_data, indent=2)}
-        Ticker Trends:
-        Top Gainers: {json.dumps(tickers.get('top_gainers', []), indent=2)}
-        Top Losers: {json.dumps(tickers.get('top_losers', []), indent=2)}
-        Most Actively Traded: {json.dumps(tickers.get('most_actively_traded', []), indent=2)}
-        """
-
-        try:
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant tasked with summarizing data into a concise newsletter."},
-                    {"role": "user", "content": f"Summarize the following data into a newsletter:\n{input_text}"}
-                ],
-                max_tokens=1500,
-                temperature=0.7
-            )
-            return {"newsletter": response.choices[0].message.content.strip()}
-        except Exception as e:
-            return {"error": f"Failed to generate newsletter: {e}"}
-
+newsletter_writer = Agent(
+    role=agents_config["newsletter_writer"]["role"],
+    goal=agents_config["newsletter_writer"]["goal"],
+    backstory=agents_config["newsletter_writer"]["backstory"]
+)
 
 ### Define Tasks ###
 news_task = Task(
-    description="Load news data and store in ChromaDB.",
-    expected_output="News data loaded successfully",
-    agent=NewsDataAgent(),
+    description="Load news data from Alpha Vantage into ChromaDB.",
+    expected_output="News data loaded successfully.",
+    agent=news_loader,
+    callback=lambda output: st.info(f"News Task Completed: {output.raw}"),
 )
 
 ticker_task = Task(
-    description="Load ticker trends and store in ChromaDB.",
-    expected_output="Ticker trends data loaded successfully",
-    agent=TickerTrendsAgent(),
+    description="Load ticker trends data from Alpha Vantage into ChromaDB.",
+    expected_output="Ticker trends data loaded successfully.",
+    agent=ticker_loader,
+    callback=lambda output: st.info(f"Ticker Task Completed: {output.raw}"),
 )
 
 summarization_task = Task(
-    description="Retrieve and summarize data.",
-    expected_output="Combined data ready for summarization",
-    agent=DataSummarizationAgent(),
+    description="Retrieve and summarize data from ChromaDB.",
+    expected_output="Data summarized successfully.",
+    agent=summarizer,
     context=[news_task, ticker_task],
+    callback=lambda output: st.info(f"Summarization Task Completed: {output.raw}"),
 )
 
 newsletter_task = Task(
-    description="Generate a newsletter summarizing data.",
-    expected_output="A concise financial newsletter",
-    agent=NewsletterAgent(),
+    description="Generate a concise newsletter summarizing market data.",
+    expected_output="Newsletter generated successfully.",
+    agent=newsletter_writer,
     context=[summarization_task],
+    callback=lambda output: st.success(f"Newsletter:\n{output.raw}"),
 )
 
 ### Assemble the Crew ###
 my_crew = Crew(
-    agents=[news_task.agent, ticker_task.agent, summarization_task.agent, newsletter_task.agent],
+    agents=[news_loader, ticker_loader, summarizer, newsletter_writer],
     tasks=[news_task, ticker_task, summarization_task, newsletter_task],
+    verbose=True
 )
 
 ### Streamlit ###
 def generate_newsletter():
-    st.write("### Generating Newsletter")
+    st.write("### Generating Newsletter...")
     try:
         results = my_crew.kickoff(inputs={})
         newsletter = results["newsletter_task"]
-        if "error" in newsletter:
-            st.error(newsletter["error"])
-        else:
-            st.subheader("Generated Newsletter")
-            st.text(newsletter["newsletter"])
+        st.success(f"Newsletter Generated:\n{newsletter.raw}")
     except Exception as e:
         st.error(f"Failed to generate newsletter: {e}")
 
 
+### Main Logic ###
 if option == "Generate Newsletter":
     generate_newsletter()

@@ -9,3 +9,4 @@ fpdf
 crewai[tools]
 bespokelabs
 scikit-learn
+pyyaml
