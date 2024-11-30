@@ -12,7 +12,7 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import yaml
 
-# Suppress warnings
+# Debugging: Suppress warnings
 import warnings
 warnings.filterwarnings("ignore", message="Overriding of current TracerProvider is not allowed")
 
@@ -108,19 +108,34 @@ my_crew = Crew(
     verbose=True
 )
 
+### Debugging Helper ###
+def debug_chromadb():
+    news_collection = client.get_or_create_collection("news_sentiment_data")
+    ticker_collection = client.get_or_create_collection("ticker_trends_data")
+    st.write("### Debugging ChromaDB Collections")
+    st.json({"news": news_collection.get(), "tickers": ticker_collection.get()})
+
 ### Streamlit ###
 def generate_newsletter():
     st.write("### Generating Newsletter...")
     try:
-        # Remove `inputs` from kickoff
-        results = my_crew.kickoff()
+        # Debug: Validate task setup
+        st.write("Debug: Tasks and Agents Initialized")
         
-        # Access the newsletter task output directly
-        newsletter_output = newsletter_task.output.raw
-        st.success(f"Newsletter Generated:\n{newsletter_output}")
+        # Execute the crew workflow
+        results = my_crew.kickoff()
+
+        # Retrieve the newsletter output
+        if "newsletter_task" in results:
+            newsletter_output = newsletter_task.output.raw
+            st.success(f"Newsletter Generated:\n{newsletter_output}")
+        else:
+            st.error("Newsletter task failed to produce output.")
+    except openai.error.RateLimitError as e:
+        st.error(f"Rate limit reached: {str(e)}. Please try again later.")
     except Exception as e:
         st.error(f"Failed to generate newsletter: {e}")
-
+        debug_chromadb()  # Debugging step
 
 ### Main Logic ###
 if option == "Generate Newsletter":

@@ -10,3 +10,4 @@ crewai[tools]
 bespokelabs
 scikit-learn
 pyyaml
+pydantic>=2.4.2,<3.0
