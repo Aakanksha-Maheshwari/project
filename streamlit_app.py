@@ -2,7 +2,8 @@ import streamlit as st
 import requests
 import json
 import openai
-from bespokelabs import BespokeLabs
+from bespokelabs import BespokeLabs, DefaultHttpxClient
+import httpx
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -16,8 +17,16 @@ alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
 bespoke_key = st.secrets["bespoke_labs"]["api_key"]
 
-# Initialize Bespoke Labs
-bl = BespokeLabs(auth_token=bespoke_key)
+# Initialize Bespoke Labs with DefaultHttpxClient
+custom_http_client = DefaultHttpxClient(
+    proxies="http://my.test.proxy.example.com",  # Replace with your actual proxy URL
+    transport=httpx.HTTPTransport(local_address="0.0.0.0")  # Optional customization
+)
+
+bl = BespokeLabs(
+    auth_token=bespoke_key,
+    http_client=custom_http_client
+)
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
@@ -27,6 +36,14 @@ tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 st.title("Alpha Vantage Multi-Agent System with RAG, OpenAI GPT-4, and Bespoke Labs")
 
 ### Helper Functions ###
+def retrieve_from_multiple_rags(query, collections, top_k=5):
+    """Search multiple collections for relevant RAG data."""
+    results = []
+    for collection_name in collections:
+        collection_results = retrieve_from_chromadb(collection_name, query, top_k)
+        results.extend([doc for doc in collection_results if doc])  # Filter empty results
+    return results
+
 def update_chromadb(collection_name, data):
     """Update ChromaDB with new data."""
     collection = client.get_or_create_collection(collection_name)
@@ -43,7 +60,7 @@ def fetch_and_update_news_data():
         response = requests.get(news_url)
         response.raise_for_status()
         data = response.json()
-        st.write("News API Response:", data)  # Debugging
+        st.write("News API Response:", data)  # Print the API response
         if 'feed' in data:
             update_chromadb("news_sentiment_data", data['feed'])
             st.success("News data updated in ChromaDB.")
@@ -58,7 +75,7 @@ def fetch_and_update_ticker_trends_data():
         response = requests.get(tickers_url)
         response.raise_for_status()
         data = response.json()
-        st.write("Ticker Trends API Response:", data)  # Debugging
+        st.write("Ticker Trends API Response:", data)  # Print the API response
         if "top_gainers" in data:
             combined_data = [
                 {"type": "top_gainers", "data": data["top_gainers"]},
@@ -89,7 +106,7 @@ def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt}
@@ -98,7 +115,7 @@ def call_openai_gpt4(prompt):
         return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"Error calling OpenAI GPT-4: {e}")
-        return "Error generating response."
+        return "I'm sorry, I couldn't process your request at this time."
 
 ### Bespoke Labs Accuracy Assessment ###
 def assess_accuracy_with_bespoke(newsletter, rag_data):
