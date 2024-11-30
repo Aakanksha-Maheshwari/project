@@ -12,6 +12,10 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import yaml
 
+# Suppress warnings
+import warnings
+warnings.filterwarnings("ignore", message="Overriding of current TracerProvider is not allowed")
+
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
 
@@ -108,9 +112,12 @@ my_crew = Crew(
 def generate_newsletter():
     st.write("### Generating Newsletter...")
     try:
-        results = my_crew.kickoff(inputs={})
-        newsletter = results["newsletter_task"]
-        st.success(f"Newsletter Generated:\n{newsletter.raw}")
+        # Remove `inputs` from kickoff
+        results = my_crew.kickoff()
+        
+        # Access the newsletter task output directly
+        newsletter_output = newsletter_task.output.raw
+        st.success(f"Newsletter Generated:\n{newsletter_output}")
     except Exception as e:
         st.error(f"Failed to generate newsletter: {e}")
 
