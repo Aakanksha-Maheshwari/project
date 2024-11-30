@@ -5,9 +5,6 @@ pysqlite3-binary
 protobuf==3.20
 chromadb
 crewai
-fpdf
 crewai[tools]
 bespokelabs
 scikit-learn
-pyyaml
-pydantic>=2.4.2,<3.0
