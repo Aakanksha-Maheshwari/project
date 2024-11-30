@@ -15,9 +15,8 @@ from chromadb.config import Settings
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
 
-# Access keys from secrets.toml
-alpha_vantage_key = st.secrets["api_keys"]["alpha_vantage"]
-openai.api_key = st.secrets["api_keys"]["openai"]
+alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
+openai.api_key = st.secrets["openai"]["api_key"]
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
