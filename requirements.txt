@@ -1,12 +1,12 @@
 streamlit
 requests
-openai
+openai==1.55.3
 pysqlite3-binary
 protobuf==3.20
 chromadb
 crewai
 crewai[tools]
-httpx
+httpx==0.27.2
 bespokelabs
 jsonschema
 pydantic
