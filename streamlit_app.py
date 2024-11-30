@@ -16,8 +16,8 @@ from chromadb.config import Settings
 client = chromadb.PersistentClient()
 
 # Access keys from secrets.toml
-alpha_vantage_key = st.secrets["api_keys"]["alpha_vantage"]
-openai.api_key = st.secrets["api_keys"]["openai"]
+alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
+openai.api_key = st.secrets["openai"]["api_key"]
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
@@ -70,7 +70,6 @@ class MarketTrendsAnalystAgent(Agent):
 # Risk Management Analyst Agent
 class RiskManagementAnalystAgent(Agent):
     def handle(self):
-        # Simulated risk analysis
         risks = [
             "High volatility in technology stocks.",
             "Potential downturn in global markets due to geopolitical tensions.",
@@ -97,17 +96,20 @@ class NewsletterGeneratorAgent(Agent):
         Strategies: {json.dumps(self.strategies, indent=2)}
         """
         
-        # Use OpenAI API to summarize the data
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",  # Adjust model based on your access
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant summarizing financial data into a concise newsletter."},
-                {"role": "user", "content": f"Summarize the following data into a newsletter:\n{input_text}"}
-            ],
-            max_tokens=1500,
-            temperature=0.7
-        )
-        return {"newsletter": response["choices"][0]["message"]["content"].strip()}
+        try:
+            # Use OpenAI's Chat API
+            response = openai.chat.completions.create(
+                model="gpt-4o-mini",  # Adjust model as per your access level
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant summarizing financial data into a concise newsletter."},
+                    {"role": "user", "content": f"Summarize the following data into a newsletter:\n{input_text}"}
+                ],
+                max_tokens=1500,
+                temperature=0.7
+            )
+            return {"newsletter": response.choices[0].message["content"].strip()}
+        except Exception as e:
+            return {"error": f"Failed to generate newsletter: {str(e)}"}
 
 ### Crew AI Multi-Agent System ###
 system = System()
@@ -139,9 +141,12 @@ def generate_newsletter_with_agents():
     system.add_agent("newsletter_generator", newsletter_agent)
     newsletter_result = system.run("newsletter_generator")
 
-    # Display the generated newsletter
-    st.subheader("Generated Newsletter")
-    st.text(newsletter_result["newsletter"])
+    # Display the generated newsletter or handle errors
+    if "error" in newsletter_result:
+        st.error(newsletter_result["error"])
+    else:
+        st.subheader("Generated Newsletter")
+        st.text(newsletter_result["newsletter"])
 
 # Function to Load News Data
 def load_news_data():
