@@ -71,7 +71,7 @@ def fetch_and_update_ticker_trends_data():
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
     try:
-        response = openai.ChatCompletion.create(
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
