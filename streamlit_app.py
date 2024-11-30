@@ -28,9 +28,9 @@ client = chromadb.PersistentClient()
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai_api_key = st.secrets["openai"]["api_key"]
 
-# Set OpenAI API Key for the library and environment
+# Set OpenAI API key for the library and environment
 openai.api_key = openai_api_key
-os.environ["OPENAI_API_KEY"] = openai_api_key  # Ensure OpenAI library picks it up
+os.environ["OPENAI_API_KEY"] = openai_api_key  # Ensure compatibility with OpenAI library
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
@@ -47,13 +47,23 @@ option = st.sidebar.radio(
 )
 
 ### Define Agents ###
+
+# Agent to load and store news data
 class NewsDataAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            role="News Loader",
+            goal="Load and store news data from Alpha Vantage.",
+            backstory="This agent retrieves news data and stores it in ChromaDB for further analysis."
+        )
+
     def handle(self):
         news_collection = client.get_or_create_collection("news_sentiment_data")
         try:
             response = requests.get(news_url)
             response.raise_for_status()
             data = response.json()
+
             if "feed" in data:
                 for i, item in enumerate(data["feed"], start=1):
                     document = {
@@ -98,7 +108,15 @@ class NewsDataAgent(Agent):
             return {"error": f"Unexpected error: {e}"}
 
 
+# Agent to load and store ticker trends data
 class TickerTrendsAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            role="Ticker Trends Loader",
+            goal="Load and store ticker trends data from Alpha Vantage.",
+            backstory="This agent retrieves ticker trends data and stores it in ChromaDB for further analysis."
+        )
+
     def handle(self):
         ticker_collection = client.get_or_create_collection("ticker_trends_data")
         try:
@@ -130,7 +148,15 @@ class TickerTrendsAgent(Agent):
             return {"error": f"Unexpected error: {e}"}
 
 
+# Agent to retrieve data from ChromaDB and summarize
 class DataSummarizationAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            role="Data Summarizer",
+            goal="Retrieve and summarize data from ChromaDB.",
+            backstory="This agent processes stored data to prepare it for newsletter generation."
+        )
+
     def handle(self, inputs):
         news_collection = client.get_or_create_collection("news_sentiment_data")
         ticker_collection = client.get_or_create_collection("ticker_trends_data")
@@ -151,7 +177,15 @@ class DataSummarizationAgent(Agent):
             return {"error": f"Error retrieving data: {e}"}
 
 
+# Agent to generate a newsletter
 class NewsletterAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            role="Newsletter Generator",
+            goal="Generate a concise newsletter summarizing market data.",
+            backstory="This agent creates newsletters summarizing market trends and news."
+        )
+
     def handle(self, inputs):
         combined_data = inputs.get("combined_data", {})
         news_data = combined_data.get("news", [])
@@ -179,7 +213,7 @@ class NewsletterAgent(Agent):
             return {"error": f"Failed to generate newsletter: {e}"}
 
 
-### Tasks ###
+### Define Tasks ###
 news_task = Task(
     description="Load news data and store in ChromaDB.",
     expected_output="News data loaded successfully",
@@ -206,7 +240,7 @@ newsletter_task = Task(
     context=[summarization_task],
 )
 
-### Crew ###
+### Assemble the Crew ###
 my_crew = Crew(
     agents=[news_task.agent, ticker_task.agent, summarization_task.agent, newsletter_task.agent],
     tasks=[news_task, ticker_task, summarization_task, newsletter_task],
