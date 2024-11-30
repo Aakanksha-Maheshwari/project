@@ -12,11 +12,23 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 from chromadb.config import Settings
 
+import streamlit as st
+import requests
+import json
+import openai
+from crewai import Agent, Task, Crew
+import chromadb
+from chromadb.config import Settings
+
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
 
+# Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
-openai.api_key = st.secrets["openai"]["api_key"]
+openai_api_key = st.secrets["openai"]["api_key"]
+
+# Set OpenAI API key for the library
+openai.api_key = openai_api_key
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
@@ -38,7 +50,6 @@ option = st.sidebar.radio(
 class NewsDataAgent(Agent):
     def handle(self):
         news_collection = client.get_or_create_collection("news_sentiment_data")
-
         try:
             response = requests.get(news_url)
             response.raise_for_status()
@@ -92,7 +103,6 @@ class NewsDataAgent(Agent):
 class TickerTrendsAgent(Agent):
     def handle(self):
         ticker_collection = client.get_or_create_collection("ticker_trends_data")
-
         try:
             response = requests.get(tickers_url)
             response.raise_for_status()
@@ -128,7 +138,6 @@ class DataSummarizationAgent(Agent):
         news_collection = client.get_or_create_collection("news_sentiment_data")
         ticker_collection = client.get_or_create_collection("ticker_trends_data")
         try:
-            # Retrieve data from ChromaDB
             news_results = news_collection.get()
             news_data = [json.loads(doc) for doc in news_results["documents"]]
             ticker_data = {}
@@ -151,7 +160,6 @@ class NewsletterAgent(Agent):
         combined_data = inputs.get("combined_data", {})
         news_data = combined_data.get("news", [])
         tickers = combined_data.get("tickers", {})
-        
         input_text = f"""
         News Data: {json.dumps(news_data, indent=2)}
         Ticker Trends:
