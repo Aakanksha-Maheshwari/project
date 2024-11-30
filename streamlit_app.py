@@ -41,7 +41,7 @@ def fetch_and_update_news_data():
         response = requests.get(news_url)
         response.raise_for_status()
         data = response.json()
-        st.write("News API Response:", data)  # Print the API response for debugging
+        st.write("News API Response:", data)  # Debugging
         if 'feed' in data:
             update_chromadb("news_sentiment_data", data['feed'])
             st.success("News data updated in ChromaDB.")
@@ -56,7 +56,7 @@ def fetch_and_update_ticker_trends_data():
         response = requests.get(tickers_url)
         response.raise_for_status()
         data = response.json()
-        st.write("Ticker Trends API Response:", data)  # Print the API response for debugging
+        st.write("Ticker Trends API Response:", data)  # Debugging
         if "top_gainers" in data:
             combined_data = [
                 {"type": "top_gainers", "data": data["top_gainers"]},
@@ -69,6 +69,19 @@ def fetch_and_update_ticker_trends_data():
             st.error("Invalid data format received from API.")
     except Exception as e:
         st.error(f"Error updating ticker trends data: {e}")
+
+def retrieve_from_chromadb(collection_name, query, top_k=5):
+    """Retrieve relevant documents from ChromaDB."""
+    collection = client.get_or_create_collection(collection_name)
+    try:
+        results = collection.query(
+            query_texts=[query],
+            n_results=top_k
+        )
+        return results['documents']
+    except Exception as e:
+        st.error(f"Error retrieving data from ChromaDB: {e}")
+        return []
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
@@ -89,15 +102,12 @@ def call_openai_gpt4(prompt):
 def measure_newsletter_accuracy(context, claim):
     """Use Bespoke Labs API to measure the accuracy of the newsletter."""
     try:
-        payload = {
-            "context": context,
-            "claim": claim
-        }
+        payload = {"context": context, "claim": claim}
         headers = {"Authorization": f"Bearer {bespoke_key}"}
         response = requests.post(bespoke_api_url, json=payload, headers=headers)
         response.raise_for_status()
         result = response.json()
-        st.write("Bespoke API Response:", result)  # Debugging: Log Bespoke API response
+        st.write("Bespoke API Response:", result)  # Debugging
         return result.get("accuracy_score", "No accuracy score provided")
     except Exception as e:
         st.error(f"Error calling Bespoke Labs API: {e}")
@@ -132,18 +142,11 @@ class RAGAgent:
         summary = call_openai_gpt4(augmented_prompt)
         return summary
 
-def retrieve_from_chromadb(collection_name, query, top_k=5):
-    """Retrieve relevant documents from ChromaDB."""
-    collection = client.get_or_create_collection(collection_name)
-    try:
-        results = collection.query(
-            query_texts=[query],
-            n_results=top_k
-        )
-        return results['documents']
-    except Exception as e:
-        st.error(f"Error retrieving data from ChromaDB: {e}")
-        return []
+### Instantiate Agents ###
+researcher = RAGAgent(role="Researcher", goal="Process news data")
+market_analyst = RAGAgent(role="Market Analyst", goal="Analyze trends")
+risk_analyst = RAGAgent(role="Risk Analyst", goal="Identify risks")
+writer = RAGAgent(role="Writer", goal="Generate newsletter")
 
 ### **Newsletter Generation with Accuracy Measurement** ###
 
