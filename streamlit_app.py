@@ -72,7 +72,7 @@ def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4-mini to process the prompt."""
     try:
         response = openai.chat.completions.create(
-            model="gpt-40-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are an assistant generating financial newsletters."},
                 {"role": "user", "content": prompt}
