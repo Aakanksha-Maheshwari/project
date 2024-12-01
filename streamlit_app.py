@@ -30,7 +30,7 @@ tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 st.title("Alpha Vantage Multi-Agent System with RAG, OpenAI GPT-4, and Bespoke Labs")
 
 ### Helper Functions ###
-def retrieve_from_multiple_rags(query, collections, top_k=5):
+def retrieve_from_multiple_rags(query, collections, top_k=3):
     """Search multiple collections for relevant RAG data."""
     results = []
     for collection_name in collections:
@@ -83,7 +83,7 @@ def fetch_and_update_ticker_trends_data():
     except Exception as e:
         st.error(f"Error updating ticker trends data: {e}")
 
-def retrieve_from_chromadb(collection_name, query, top_k=5):
+def retrieve_from_chromadb(collection_name, query, top_k=3):
     """Retrieve relevant documents from ChromaDB."""
     collection = client.get_or_create_collection(collection_name)
     try:
@@ -142,8 +142,8 @@ def assess_accuracy_with_bespoke(newsletter, rag_data):
 def generate_newsletter_with_accuracy():
     """Generate the newsletter using RAG and measure its accuracy."""
     # Retrieve RAG data
-    company_insights = retrieve_from_chromadb("news_sentiment_data", "Extract insights from news", top_k=5)
-    market_trends = retrieve_from_chromadb("ticker_trends_data", "Analyze market trends", top_k=5)
+    company_insights = retrieve_from_chromadb("news_sentiment_data", "Extract insights from news", top_k=3)
+    market_trends = retrieve_from_chromadb("ticker_trends_data", "Analyze market trends", top_k=3)
 
     if not company_insights or not market_trends:
         st.error("Insufficient RAG data for newsletter generation.")
