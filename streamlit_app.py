@@ -111,17 +111,29 @@ def call_openai_gpt4(prompt):
         st.error(f"Error calling OpenAI GPT-4: {e}")
         return "I'm sorry, I couldn't process your request at this time."
 
-### Bespoke Labs Accuracy Assessment ###
 def assess_accuracy_with_bespoke(newsletter, rag_data):
     """Assess the accuracy of the newsletter using Bespoke Labs."""
     try:
+        # Call Bespoke Labs API
         response = bl.minicheck.factcheck.create(
             claim=newsletter,
             context=json.dumps(rag_data)
         )
-        support_prob = response.get("support_prob", 0)
-        st.write("Bespoke Labs Response:", response)  # Debugging
-        return round(support_prob * 100, 2)  # Convert to percentage
+
+        # Access the support probability attribute directly
+        support_prob = getattr(response, "support_prob", None)
+        if support_prob is None:
+            st.error("Bespoke Labs response does not contain 'support_prob'.")
+            return 0
+
+        # Debugging: Display the full response object
+        st.write("Bespoke Labs Response:", response)
+
+        # Return the support probability as a percentage
+        return round(support_prob * 100, 2)
+    except AttributeError as e:
+        st.error(f"Error: Missing or incorrect attribute in Bespoke Labs response. Details: {e}")
+        return 0
     except Exception as e:
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
