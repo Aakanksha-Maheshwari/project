@@ -164,16 +164,24 @@ if st.button("Generate Financial Newsletter"):
         company_process.join()
         market_process.join()
 
-        # Collect outputs
-        company_summary, company_data, market_summary, market_data = None, None, None, None
+        # Collect outputs from agents
+        company_summary, company_data = None, []
+        market_summary, market_data = None, []
         while not output_queue.empty():
             name, result, error = output_queue.get()
             if error:
                 st.error(f"{name} Error: {error}")
-            elif name == "news_sentiment_data":
-                company_summary, company_data = result
-            elif name == "ticker_trends_data":
-                market_summary, market_data = result
+            else:
+                if name == "news_sentiment_data":
+                    if isinstance(result, str):
+                        company_summary = result  # Summary of company data
+                    elif isinstance(result, list):
+                        company_data = result  # Actual company data
+                elif name == "ticker_trends_data":
+                    if isinstance(result, str):
+                        market_summary = result  # Summary of market trends
+                    elif isinstance(result, list):
+                        market_data = result  # Actual market data
 
         # Risk management agent
         risk_process = Process(
