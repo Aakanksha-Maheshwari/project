@@ -1,15 +1,19 @@
-import streamlit as st 
+import streamlit as st
 import requests
 import json
 import openai
 from multiprocessing import Process, Manager, Queue
 from bespokelabs import BespokeLabs
+from openai.embeddings_utils import get_embedding
+from bespokelabs import BespokeLabs, DefaultHttpxClient
+import httpx
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
-
 import os
+
+# Environment setup
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Initialize ChromaDB Persistent Client
@@ -28,12 +32,12 @@ news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={a
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Multi-Agent Financial Newsletter Generator")
+st.title("Multi-Agent Financial Newsletter Generator with ChromaDB")
 
 ### Helper Functions ###
 
-def fetch_and_store_data(api_url, collection_name, output_queue):
-    """Agent: Fetch and store data in ChromaDB."""
+def store_data_in_chromadb(api_url, collection_name):
+    """Fetch data from API, generate embeddings, and store in ChromaDB."""
     try:
         st.info(f"Fetching data for {collection_name} from {api_url}...")
         response = requests.get(api_url)
@@ -41,47 +45,34 @@ def fetch_and_store_data(api_url, collection_name, output_queue):
         data = response.json()
 
         if not data:
-            output_queue.put((collection_name, None, "No data returned from API."))
             st.warning(f"No data returned for {collection_name}.")
             return
 
         collection = client.get_or_create_collection(collection_name)
         for i, item in enumerate(data.get("feed", []), start=1):
+            # Generate embeddings for the document summary
+            embedding = get_embedding(item['summary'], engine="text-embedding-ada-002")
             collection.add(
                 ids=[str(i)],
+                embeddings=[embedding],
                 documents=[json.dumps(item)],
                 metadatas=[{"source": item.get("source", "N/A")}]
             )
-        output_queue.put((collection_name, "Data fetched and stored successfully.", None))
-        st.success(f"Data successfully stored for {collection_name}.")
+        st.success(f"Data successfully stored in ChromaDB for {collection_name}.")
     except Exception as e:
-        st.error(f"Error fetching data for {collection_name}: {e}")
-        output_queue.put((collection_name, None, f"Error: {str(e)}"))
+        st.error(f"Error storing data in ChromaDB for {collection_name}: {e}")
 
-def retrieve_and_summarize(collection_name, query_text, top_k, output_queue):
-    """Agent: Retrieve and summarize data from ChromaDB."""
+def retrieve_data_from_chromadb(collection_name, query_text, top_k):
+    """Retrieve data from ChromaDB using similarity search."""
     try:
-        st.info(f"Retrieving and summarizing data from {collection_name}...")
         collection = client.get_or_create_collection(collection_name)
-        results = collection.query(query_texts=[query_text], n_results=top_k)
-        documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"] if doc]
-
-        if not documents:
-            output_queue.put((collection_name, "No relevant data found.", None))
-            st.warning(f"No relevant data found in {collection_name}.")
-            return
-
-        summary_prompt = f"""
-        Summarize the following data for a financial newsletter:
-        Focus on key insights and trends:
-        {json.dumps(documents)}
-        """
-        summary = call_openai_gpt4(summary_prompt)
-        output_queue.put((collection_name, summary, documents))
-        st.success(f"Summary generated for {collection_name}.")
+        query_embedding = get_embedding(query_text, engine="text-embedding-ada-002")
+        results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
+        documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"]]
+        return documents
     except Exception as e:
-        st.error(f"Error retrieving data from {collection_name}: {e}")
-        output_queue.put((collection_name, None, f"Error: {str(e)}"))
+        st.error(f"Error retrieving data from ChromaDB for {collection_name}: {e}")
+        return []
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
@@ -99,13 +90,13 @@ def call_openai_gpt4(prompt):
         st.error(f"Error calling GPT-4: {e}")
         return f"Error: {str(e)}"
 
-def assess_accuracy_with_bespoke(newsletter, relevant_data):
-    """Agent: Use Bespoke Labs to assess newsletter accuracy."""
+def assess_accuracy_with_bespoke(newsletter, rag_summary):
+    """Compare newsletter with RAG summary using Bespoke Labs."""
     try:
         st.info("Assessing newsletter accuracy with Bespoke Labs...")
         response = bl.minicheck.factcheck.create(
             claim=newsletter,
-            context=json.dumps(relevant_data)
+            context=json.dumps(rag_summary)
         )
         support_prob = getattr(response, "support_prob", None)
         if support_prob is None:
@@ -122,13 +113,17 @@ def assess_accuracy_with_bespoke(newsletter, relevant_data):
 
 def company_analyst_agent(output_queue):
     """Company Analyst Agent."""
-    fetch_and_store_data(news_url, "news_sentiment_data", output_queue)
-    retrieve_and_summarize("news_sentiment_data", "Company performance insights", 50, output_queue)
+    data = retrieve_data_from_chromadb("news_sentiment_data", "Company performance insights", 50)
+    summary_prompt = f"Summarize the following company data: {json.dumps(data)}"
+    summary = call_openai_gpt4(summary_prompt)
+    output_queue.put(("company", {"data": data, "summary": summary}, None))
 
 def market_trends_agent(output_queue):
     """Market Trends Analyst Agent."""
-    fetch_and_store_data(tickers_url, "ticker_trends_data", output_queue)
-    retrieve_and_summarize("ticker_trends_data", "Market trends insights", 20, output_queue)
+    data = retrieve_data_from_chromadb("ticker_trends_data", "Market trends insights", 20)
+    summary_prompt = f"Summarize the following market trends data: {json.dumps(data)}"
+    summary = call_openai_gpt4(summary_prompt)
+    output_queue.put(("market_trends", {"data": data, "summary": summary}, None))
 
 def risk_management_agent(company_data, market_data, output_queue):
     """Risk Management Agent."""
@@ -136,7 +131,6 @@ def risk_management_agent(company_data, market_data, output_queue):
         st.info("Performing risk management analysis...")
         if not company_data or not market_data:
             output_queue.put(("risk_management", "No risk data available.", None))
-            st.warning("No risk data available for analysis.")
             return
 
         risk_prompt = f"""
@@ -147,7 +141,6 @@ def risk_management_agent(company_data, market_data, output_queue):
         """
         risk_summary = call_openai_gpt4(risk_prompt)
         output_queue.put(("risk_management", risk_summary, None))
-        st.success("Risk management analysis complete.")
     except Exception as e:
         st.error(f"Error in Risk Management Agent: {e}")
         output_queue.put(("risk_management", None, f"Error: {str(e)}"))
@@ -176,6 +169,10 @@ if st.button("Generate Financial Newsletter"):
     with Manager() as manager:
         output_queue = manager.Queue()
 
+        # Populate ChromaDB with data from Alpha Vantage
+        store_data_in_chromadb(news_url, "news_sentiment_data")
+        store_data_in_chromadb(tickers_url, "ticker_trends_data")
+
         # Launch agents as processes
         company_process = Process(target=company_analyst_agent, args=(output_queue,))
         market_process = Process(target=market_trends_agent, args=(output_queue,))
@@ -184,25 +181,22 @@ if st.button("Generate Financial Newsletter"):
         company_process.join()
         market_process.join()
 
-        # Collect outputs from agents
-        company_summary, company_data = None, []
-        market_summary, market_data = None, []
+        # Collect outputs
+        company_summary, market_summary, rag_summary = None, None, []
+        company_data, market_data = [], []
         while not output_queue.empty():
             name, result, error = output_queue.get()
             st.info(f"Queue data received: {name}, Result: {result}, Error: {error}")
             if error:
                 st.error(f"{name} Error: {error}")
-            else:
-                if name == "news_sentiment_data":
-                    if isinstance(result, str):
-                        company_summary = result
-                    elif isinstance(result, list):
-                        company_data = result
-                elif name == "ticker_trends_data":
-                    if isinstance(result, str):
-                        market_summary = result
-                    elif isinstance(result, list):
-                        market_data = result
+            elif name == "company":
+                company_summary = result["summary"]
+                company_data = result["data"]
+                rag_summary.append(result)
+            elif name == "market_trends":
+                market_summary = result["summary"]
+                market_data = result["data"]
+                rag_summary.append(result)
 
         # Risk management agent
         risk_process = Process(
@@ -242,9 +236,8 @@ if st.button("Generate Financial Newsletter"):
             st.subheader("Generated Newsletter")
             st.markdown(newsletter)
 
-        # Assess accuracy
-        combined_data = (company_data or []) + (market_data or [])
-        accuracy, error = assess_accuracy_with_bespoke(newsletter, combined_data)
+        # Assess Accuracy
+        accuracy, error = assess_accuracy_with_bespoke(newsletter, rag_summary)
         if error:
             st.error(f"Accuracy Error: {error}")
         else:
