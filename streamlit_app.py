@@ -30,7 +30,8 @@ tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 st.title("Alpha Vantage Multi-Agent System with RAG, OpenAI GPT-4, and Bespoke Labs")
 
 ### Helper Functions ###
-def retrieve_from_multiple_rags(query, collections, top_k=3):
+
+def retrieve_from_multiple_rags(query, collections, top_k=5):
     """Search multiple collections for relevant RAG data."""
     results = []
     for collection_name in collections:
@@ -54,7 +55,7 @@ def fetch_and_update_news_data():
         response = requests.get(news_url)
         response.raise_for_status()
         data = response.json()
-        st.write("News API Response:", data)  # Print the API response
+        st.write("News API Response:", data)  # Debugging
         if 'feed' in data:
             update_chromadb("news_sentiment_data", data['feed'])
             st.success("News data updated in ChromaDB.")
@@ -69,7 +70,7 @@ def fetch_and_update_ticker_trends_data():
         response = requests.get(tickers_url)
         response.raise_for_status()
         data = response.json()
-        st.write("Ticker Trends API Response:", data)  # Print the API response
+        st.write("Ticker Trends API Response:", data)  # Debugging
         if "top_gainers" in data:
             combined_data = [
                 {"type": "top_gainers", "data": data["top_gainers"]},
@@ -83,7 +84,7 @@ def fetch_and_update_ticker_trends_data():
     except Exception as e:
         st.error(f"Error updating ticker trends data: {e}")
 
-def retrieve_from_chromadb(collection_name, query, top_k=3):
+def retrieve_from_chromadb(collection_name, query, top_k=5):
     """Retrieve relevant documents from ChromaDB."""
     collection = client.get_or_create_collection(collection_name)
     try:
@@ -99,7 +100,7 @@ def retrieve_from_chromadb(collection_name, query, top_k=3):
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
     try:
-        response = openai.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
@@ -111,62 +112,65 @@ def call_openai_gpt4(prompt):
         st.error(f"Error calling OpenAI GPT-4: {e}")
         return "I'm sorry, I couldn't process your request at this time."
 
+def validate_rag_data(rag_data, source):
+    """Validate RAG data for completeness and relevance."""
+    if not rag_data:
+        st.warning(f"No data retrieved from {source}.")
+    else:
+        st.write(f"Retrieved {len(rag_data)} items from {source}.")
+    return rag_data
+
 def assess_accuracy_with_bespoke(newsletter, rag_data):
     """Assess the accuracy of the newsletter using Bespoke Labs."""
     try:
-        # Call Bespoke Labs API
         response = bl.minicheck.factcheck.create(
             claim=newsletter,
             context=json.dumps(rag_data)
         )
 
-        # Access the support probability attribute directly
         support_prob = getattr(response, "support_prob", None)
         if support_prob is None:
             st.error("Bespoke Labs response does not contain 'support_prob'.")
             return 0
 
-        # Debugging: Display the full response object
         st.write("Bespoke Labs Response:", response)
-
-        # Return the support probability as a percentage
         return round(support_prob * 100, 2)
-    except AttributeError as e:
-        st.error(f"Error: Missing or incorrect attribute in Bespoke Labs response. Details: {e}")
-        return 0
     except Exception as e:
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
 
 ### Newsletter Generation ###
+
 def generate_newsletter_with_accuracy():
     """Generate the newsletter using RAG and measure its accuracy."""
-    # Retrieve RAG data
-    company_insights = retrieve_from_chromadb("news_sentiment_data", "Extract insights from news", top_k=3)
-    market_trends = retrieve_from_chromadb("ticker_trends_data", "Analyze market trends", top_k=3)
+    company_insights = retrieve_from_chromadb("news_sentiment_data", "Detailed insights about company performance", top_k=5)
+    company_insights = validate_rag_data(company_insights, "News Sentiment Data")
+
+    market_trends = retrieve_from_chromadb("ticker_trends_data", "Key market trends and top performers", top_k=5)
+    market_trends = validate_rag_data(market_trends, "Ticker Trends Data")
 
     if not company_insights or not market_trends:
         st.error("Insufficient RAG data for newsletter generation.")
         return
 
-    # Summarize RAG data
-    summarized_insights = call_openai_gpt4(f"Summarize the following company insights:\n{company_insights}")
-    summarized_trends = call_openai_gpt4(f"Summarize the following market trends:\n{market_trends}")
+    summarized_insights = call_openai_gpt4(f"""
+    Summarize the following insights for a newsletter:
+    {company_insights}
+    """)
+    summarized_trends = call_openai_gpt4(f"""
+    Summarize the market trends from the following data, focusing on top gainers, losers, and trends:
+    {market_trends}
+    """)
 
-    # Generate newsletter
     prompt = f"""
-    Generate a professional newsletter based on the following:
-    Company Insights:
-    {summarized_insights}
-
-    Market Trends:
-    {summarized_trends}
+    Create a professional daily newsletter. Include:
+    1. Key Company Insights: {summarized_insights}
+    2. Major Market Trends: {summarized_trends}
     """
     newsletter = call_openai_gpt4(prompt)
     st.subheader("Generated Newsletter")
     st.markdown(newsletter)
 
-    # Assess accuracy
     rag_context = company_insights + market_trends
     accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
     st.success(f"Newsletter Accuracy: {accuracy_score}%")
