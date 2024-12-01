@@ -18,9 +18,7 @@ openai.api_key = st.secrets["openai"]["api_key"]
 bespoke_key = st.secrets["bespoke_labs"]["api_key"]
 
 # Initialize Bespoke Labs
-bl = BespokeLabs(
-    auth_token=bespoke_key
-)
+bl = BespokeLabs(auth_token=bespoke_key)
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
@@ -44,18 +42,18 @@ def retrieve_from_chromadb(collection_name, query, top_k=10):
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
-def filter_by_relevance_and_sentiment(data, min_relevance=0.7, min_sentiment=0.2):
+def filter_by_relevance_and_sentiment(data, min_relevance=0.5, min_sentiment=0.1):
     """Filter data by relevance and sentiment score thresholds."""
     filtered_data = []
     for item in data:
         if isinstance(item, dict):  # Ensure item is a dictionary
             topics = item.get("topics", [])
-            if all(
+            overall_sentiment = item.get("overall_sentiment_score", 0)
+            if any(
                 topic.get("relevance_score", 0) >= min_relevance for topic in topics
-            ) and item.get("overall_sentiment_score", 0) >= min_sentiment:
+            ) and overall_sentiment >= min_sentiment:
                 filtered_data.append(item)
     return filtered_data
-
 
 def validate_rag_data(rag_data, source):
     """Validate and filter RAG data for relevance."""
@@ -63,7 +61,6 @@ def validate_rag_data(rag_data, source):
         st.warning(f"No data retrieved from {source}.")
         return []
 
-    # Filter data safely
     filtered_data = filter_by_relevance_and_sentiment(rag_data)
     if not filtered_data:
         st.warning(f"No highly relevant or positive sentiment data found in {source}.")
@@ -135,18 +132,17 @@ def fetch_and_update_ticker_trends_data():
         st.write("Ticker Trends API Response:", data)
         if "top_gainers" in data:
             collection = client.get_or_create_collection("ticker_trends_data")
-            collection.add(
-                ids=[str(i) for i in range(len(data["top_gainers"]))],
-                documents=[json.dumps(item) for item in data["top_gainers"]],
-                metadatas=[{"type": "gainer"} for _ in data["top_gainers"]]
-            )
+            for i, item in enumerate(data["top_gainers"], start=1):
+                collection.add(
+                    ids=[str(i)],
+                    documents=[json.dumps(item)],
+                    metadatas=[{"type": "gainer"}]
+                )
             st.success("Ticker trends data updated in ChromaDB.")
         else:
             st.error("Invalid data format received from API.")
     except Exception as e:
         st.error(f"Error updating ticker trends data: {e}")
-
-### Newsletter Generation ###
 
 def generate_fallback_newsletter():
     """Generate a fallback newsletter when no RAG data is available."""
