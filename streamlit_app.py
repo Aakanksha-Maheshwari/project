@@ -25,9 +25,87 @@ news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={a
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Alpha Vantage Financial Newsletter with RAG and GPT-4")
+st.title("Multi-Agent Financial Newsletter Generator")
+
+### Agent Functions ###
+
+def company_analyst_agent():
+    """Fetch and analyze company performance data."""
+    try:
+        collection_name = "news_sentiment_data"
+        fetch_and_store_data(news_url, collection_name)
+        summary, data = retrieve_and_summarize(collection_name, "Company performance insights", top_k=50)
+        return summary, data
+    except Exception as e:
+        st.error(f"Error in Company Analyst Agent: {e}")
+        return "No data from Company Analyst Agent.", []
+
+def market_trends_analyst_agent():
+    """Fetch and analyze market trends data."""
+    try:
+        collection_name = "ticker_trends_data"
+        fetch_and_store_data(tickers_url, collection_name)
+        summary, data = retrieve_and_summarize(collection_name, "Market trends insights", top_k=20)
+        return summary, data
+    except Exception as e:
+        st.error(f"Error in Market Trends Analyst Agent: {e}")
+        return "No data from Market Trends Analyst Agent.", []
+
+def risk_management_agent(company_data, market_data):
+    """Evaluate risks based on company and market data."""
+    try:
+        if not company_data and not market_data:
+            return "No risk data available."
+
+        risk_analysis_prompt = f"""
+        Analyze the following data for potential risks:
+        Company Data: {json.dumps(company_data)}
+        Market Data: {json.dumps(market_data)}
+        Provide insights on major risks for investors.
+        """
+        return call_openai_gpt4(risk_analysis_prompt)
+    except Exception as e:
+        st.error(f"Error in Risk Management Agent: {e}")
+        return "Error analyzing risks."
+
+def newsletter_generator_agent(company_summary, market_summary, risk_summary):
+    """Generate the newsletter using agent outputs."""
+    try:
+        newsletter_prompt = f"""
+        Generate a financial newsletter combining the following:
+        - Key Company Insights: {company_summary}
+        - Major Market Trends: {market_summary}
+        - Risk Management Insights: {risk_summary}
+        Provide a professional and cohesive newsletter.
+        """
+        return call_openai_gpt4(newsletter_prompt)
+    except Exception as e:
+        st.error(f"Error in Newsletter Generator Agent: {e}")
+        return "Error generating newsletter."
 
 ### Helper Functions ###
+
+def fetch_and_store_data(api_url, collection_name):
+    """Fetch data from API and store in ChromaDB."""
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data:
+            st.warning(f"No data returned from API for {collection_name}.")
+            return
+
+        collection = client.get_or_create_collection(collection_name)
+        for i, item in enumerate(data.get("feed", []), start=1):
+            collection.add(
+                ids=[str(i)],
+                documents=[json.dumps(item)],
+                metadatas=[{"source": item.get("source", "N/A")}]
+            )
+        st.success(f"Data fetched and stored in {collection_name}.")
+    except Exception as e:
+        st.error(f"Error fetching data for {collection_name}: {e}")
 
 def retrieve_and_summarize(collection_name, query_text, top_k=10):
     """Retrieve data from ChromaDB and summarize."""
@@ -39,7 +117,6 @@ def retrieve_and_summarize(collection_name, query_text, top_k=10):
         if not documents:
             return "No relevant data found.", []
 
-        # Summarize the retrieved data
         summary_prompt = f"""
         Summarize the following data for a financial newsletter:
         Focus on key insights and trends:
@@ -48,7 +125,7 @@ def retrieve_and_summarize(collection_name, query_text, top_k=10):
         summary = call_openai_gpt4(summary_prompt)
         return summary, documents
     except Exception as e:
-        st.error(f"Error retrieving from {collection_name}: {e}")
+        st.error(f"Error retrieving data from {collection_name}: {e}")
         return "Error in data retrieval.", []
 
 def call_openai_gpt4(prompt):
@@ -86,62 +163,22 @@ def assess_accuracy_with_bespoke(newsletter, relevant_data):
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
 
-def fetch_and_store_data(api_url, collection_name):
-    """Fetch data from API and store in ChromaDB."""
-    try:
-        response = requests.get(api_url)
-        response.raise_for_status()
-        data = response.json()
 
-        if not data:
-            st.warning("Empty response from API.")
-            return
+### Main Logic ###
 
-        collection = client.get_or_create_collection(collection_name)
-        for i, item in enumerate(data.get("feed", []), start=1):
-            collection.add(
-                ids=[str(i)],
-                documents=[json.dumps(item)],
-                metadatas=[{"source": item.get("source", "N/A")}]
-            )
-        st.success(f"Data from {collection_name} updated successfully.")
-    except Exception as e:
-        st.error(f"Error fetching data for {collection_name}: {e}")
+if st.button("Generate Financial Newsletter"):
+    # Execute agents
+    company_summary, company_data = company_analyst_agent()
+    market_summary, market_data = market_trends_analyst_agent()
+    risk_summary = risk_management_agent(company_data, market_data)
 
-### Newsletter Generation ###
-
-def generate_newsletter():
-    """Generate the financial newsletter."""
-    news_summary, news_data = retrieve_and_summarize("news_sentiment_data", "Company performance insights", top_k=50)
-    trends_summary, trends_data = retrieve_and_summarize("ticker_trends_data", "Market trends insights", top_k=20)
-
-    if not news_data and not trends_data:
-        st.error("No relevant data available for newsletter generation.")
-        st.subheader("Fallback Newsletter")
-        st.markdown("No relevant financial data available. Please check back later for updates.")
-        return
-
-    newsletter_prompt = f"""
-    Generate a professional financial newsletter:
-    Key Company Insights: {news_summary}
-    Major Market Trends: {trends_summary}
-    """
-    newsletter = call_openai_gpt4(newsletter_prompt)
+    # Generate newsletter
+    newsletter = newsletter_generator_agent(company_summary, market_summary, risk_summary)
 
     st.subheader("Generated Newsletter")
     st.markdown(newsletter)
 
-    combined_data = news_data + trends_data
+    # Assess accuracy using Bespoke
+    combined_data = company_data + market_data
     accuracy = assess_accuracy_with_bespoke(newsletter, combined_data)
     st.success(f"Newsletter Accuracy: {accuracy}%")
-
-### Main Buttons ###
-
-if st.button("Fetch and Store News Data"):
-    fetch_and_store_data(news_url, "news_sentiment_data")
-
-if st.button("Fetch and Store Trends Data"):
-    fetch_and_store_data(tickers_url, "ticker_trends_data")
-
-if st.button("Generate Newsletter"):
-    generate_newsletter()
