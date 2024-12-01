@@ -11,14 +11,6 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import os
 
-import streamlit as st
-import requests
-import json
-from multiprocessing import Process, Manager, Queue
-from openai import OpenAI
-import chromadb
-import os
-
 # Environment setup
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -40,13 +32,12 @@ tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 st.title("Multi-Agent Financial Newsletter Generator with ChromaDB")
 
 ### Helper Functions ###
-
 def get_embedding(text, model="text-embedding-ada-002"):
     """Generate an embedding for the given text using OpenAI."""
     try:
         text = text.replace("\n", " ")
         response = client_openai.embeddings.create(input=[text], model=model)
-        return response['data'][0]['embedding']
+        return response.data[0].embedding  # Correctly access the embedding attribute
     except Exception as e:
         st.error(f"Error generating embedding: {e}")
         return None
@@ -117,28 +108,6 @@ def call_openai_gpt4(prompt):
     except Exception as e:
         st.error(f"Error calling GPT-4: {e}")
         return f"Error: {str(e)}"
-
-def assess_accuracy_with_bespoke(newsletter, rag_summary):
-    """Compare newsletter with RAG summary."""
-    try:
-        st.info("Assessing newsletter accuracy...")
-        newsletter_embedding = get_embedding(newsletter, model="text-embedding-ada-002")
-        if not newsletter_embedding:
-            st.error("Failed to generate embedding for newsletter.")
-            return 0, "Error generating newsletter embedding."
-
-        rag_embeddings = [get_embedding(item["summary"], model="text-embedding-ada-002") for item in rag_summary]
-        if not all(rag_embeddings):
-            st.error("Failed to generate embeddings for RAG summaries.")
-            return 0, "Error generating RAG embeddings."
-
-        similarities = [cosine_similarity(newsletter_embedding, e) for e in rag_embeddings if e]
-        accuracy_percentage = round((sum(similarities) / len(similarities)) * 100, 2) if similarities else 0
-
-        return accuracy_percentage, None
-    except Exception as e:
-        st.error(f"Error assessing accuracy: {e}")
-        return 0, f"Error: {str(e)}"
 
 def cosine_similarity(vec1, vec2):
     """Compute the cosine similarity between two vectors."""
