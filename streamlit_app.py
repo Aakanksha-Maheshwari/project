@@ -1,10 +1,8 @@
 import streamlit as st
 import requests
 import json
-import openai
 from multiprocessing import Process, Manager, Queue
-from bespokelabs import BespokeLabs
-from openai.embeddings_utils import get_embedding
+from openai import OpenAI
 from bespokelabs import BespokeLabs, DefaultHttpxClient
 import httpx
 __import__('pysqlite3')
@@ -21,11 +19,10 @@ client = chromadb.PersistentClient()
 
 # Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
-openai.api_key = st.secrets["openai"]["api_key"]
-bespoke_key = st.secrets["bespoke_labs"]["api_key"]
+openai_api_key = st.secrets["openai"]["api_key"]
 
-# Initialize Bespoke Labs
-bl = BespokeLabs(auth_token=bespoke_key)
+# Initialize OpenAI client
+client_openai = OpenAI(api_key=openai_api_key)
 
 # API URLs for Alpha Vantage
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
@@ -35,6 +32,16 @@ tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 st.title("Multi-Agent Financial Newsletter Generator with ChromaDB")
 
 ### Helper Functions ###
+
+def get_embedding(text, model="text-embedding-ada-002"):
+    """Generate an embedding for the given text using OpenAI."""
+    try:
+        text = text.replace("\n", " ")
+        response = client_openai.embeddings.create(input=[text], model=model)
+        return response.data[0].embedding
+    except Exception as e:
+        st.error(f"Error generating embedding: {e}")
+        return None
 
 def store_data_in_chromadb(api_url, collection_name):
     """Fetch data from API, generate embeddings, and store in ChromaDB."""
@@ -50,14 +57,17 @@ def store_data_in_chromadb(api_url, collection_name):
 
         collection = client.get_or_create_collection(collection_name)
         for i, item in enumerate(data.get("feed", []), start=1):
-            # Generate embeddings for the document summary
-            embedding = get_embedding(item['summary'], engine="text-embedding-ada-002")
-            collection.add(
-                ids=[str(i)],
-                embeddings=[embedding],
-                documents=[json.dumps(item)],
-                metadatas=[{"source": item.get("source", "N/A")}]
-            )
+            summary = item.get('summary', '')
+            if not summary:
+                continue
+            embedding = get_embedding(summary, model="text-embedding-ada-002")
+            if embedding:
+                collection.add(
+                    ids=[str(i)],
+                    embeddings=[embedding],
+                    documents=[json.dumps(item)],
+                    metadatas=[{"source": item.get("source", "N/A")}]
+                )
         st.success(f"Data successfully stored in ChromaDB for {collection_name}.")
     except Exception as e:
         st.error(f"Error storing data in ChromaDB for {collection_name}: {e}")
@@ -66,7 +76,11 @@ def retrieve_data_from_chromadb(collection_name, query_text, top_k):
     """Retrieve data from ChromaDB using similarity search."""
     try:
         collection = client.get_or_create_collection(collection_name)
-        query_embedding = get_embedding(query_text, engine="text-embedding-ada-002")
+        query_embedding = get_embedding(query_text, model="text-embedding-ada-002")
+        if not query_embedding:
+            st.error("Failed to generate embedding for query text.")
+            return []
+
         results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
         documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"]]
         return documents
@@ -78,7 +92,7 @@ def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
     try:
         st.info("Calling OpenAI GPT-4 for response...")
-        response = openai.chat.completions.create(
+        response = client_openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a financial newsletter generator."},
@@ -91,22 +105,23 @@ def call_openai_gpt4(prompt):
         return f"Error: {str(e)}"
 
 def assess_accuracy_with_bespoke(newsletter, rag_summary):
-    """Compare newsletter with RAG summary using Bespoke Labs."""
+    """Compare newsletter with RAG summary."""
     try:
-        st.info("Assessing newsletter accuracy with Bespoke Labs...")
-        response = bl.minicheck.factcheck.create(
-            claim=newsletter,
-            context=json.dumps(rag_summary)
+        st.info("Assessing newsletter accuracy...")
+        response = client_openai.embeddings.create(
+            input=[newsletter] + [item["summary"] for item in rag_summary],
+            model="text-embedding-ada-002"
         )
-        support_prob = getattr(response, "support_prob", None)
-        if support_prob is None:
-            st.warning("Bespoke Labs response does not contain 'support_prob'.")
-            return 0, "Missing 'support_prob' in Bespoke response."
+        newsletter_embedding = response.data[0].embedding
+        rag_embeddings = [r.data.embedding for r in response.data[1:]]
 
-        st.success(f"Accuracy assessed: {round(support_prob * 100, 2)}%")
-        return round(support_prob * 100, 2), None
+        similarities = [cosine_similarity(newsletter_embedding, e) for e in rag_embeddings]
+        average_similarity = sum(similarities) / len(similarities)
+        accuracy_percentage = round(average_similarity * 100, 2)
+
+        return accuracy_percentage, None
     except Exception as e:
-        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
+        st.error(f"Error assessing accuracy: {e}")
         return 0, f"Error: {str(e)}"
 
 ### Multi-Agent Execution ###
