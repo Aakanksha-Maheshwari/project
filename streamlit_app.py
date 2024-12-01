@@ -62,7 +62,7 @@ def store_data_in_chromadb(data, collection_name, record_keys):
         try:
             collection.add(
                 ids=[str(i)],
-                documents=[json.dumps(record)],
+                documents=[json.dumps(record)],  # Convert record to JSON string
                 metadatas=[{"source": record.get("source", "N/A")}]
             )
         except Exception as e:
@@ -71,12 +71,14 @@ def store_data_in_chromadb(data, collection_name, record_keys):
     st.success(f"Stored {len(records)} records in {collection_name}.")
 
 
+
 def retrieve_data(collection_name, query_text, top_k=5):
     """Retrieve data from ChromaDB."""
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
-        return [json.loads(doc) for doc in results["documents"]]
+        # Parse each document only if it's a JSON string
+        return [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"]]
     except Exception as e:
         st.error(f"Error retrieving data from {collection_name}: {e}")
         return []
