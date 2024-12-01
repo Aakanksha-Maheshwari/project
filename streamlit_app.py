@@ -44,31 +44,14 @@ def retrieve_from_chromadb(collection_name, query, top_k=10):
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
-def filter_by_relevance(data, min_relevance=0.3):
-    """Filter data by relevance score threshold."""
-    filtered_data = []
-    for item in data:
-        if isinstance(item, dict):  # Ensure item is a dictionary
-            topics = item.get("topics", [])
-            if any(float(topic.get("relevance_score", 0)) >= min_relevance for topic in topics):
-                filtered_data.append(item)
-    return filtered_data
-
-def validate_rag_data(rag_data, source, fallback_threshold=5):
-    """Validate and filter RAG data for relevance."""
+def validate_rag_data(rag_data, source):
+    """Validate RAG data for completeness."""
     if not rag_data:
         st.warning(f"No data retrieved from {source}.")
         return []
 
-    filtered_data = filter_by_relevance(rag_data)
-    if not filtered_data:
-        if len(rag_data) < fallback_threshold:
-            st.warning(f"No highly relevant data found in {source}. Using raw data as fallback.")
-            return rag_data  # Use raw data if no filtered data and below threshold
-        st.warning(f"No highly relevant data found in {source}.")
-    else:
-        st.write(f"Retrieved {len(filtered_data)} high-quality items from {source}.")
-    return filtered_data
+    st.write(f"Retrieved {len(rag_data)} items from {source}.")
+    return rag_data
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
