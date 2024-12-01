@@ -31,7 +31,7 @@ st.title("Alpha Vantage Multi-Agent System with RAG, OpenAI GPT-4, and Bespoke L
 
 ### Helper Functions ###
 
-def retrieve_from_chromadb(collection_name, query, top_k=5):
+def retrieve_from_chromadb(collection_name, query, top_k=10):
     """Retrieve relevant documents from ChromaDB."""
     collection = client.get_or_create_collection(collection_name)
     try:
@@ -39,18 +39,23 @@ def retrieve_from_chromadb(collection_name, query, top_k=5):
             query_texts=[query],
             n_results=top_k
         )
-        return results['documents']
+        return [doc for doc in results['documents'] if doc]  # Filter out empty results
     except Exception as e:
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
 def validate_rag_data(rag_data, source):
-    """Validate RAG data for completeness and relevance."""
+    """Validate and filter RAG data for relevance and quality."""
     if not rag_data:
         st.warning(f"No data retrieved from {source}.")
+        return []
+
+    filtered_data = [item for item in rag_data if "summary" in item]
+    if not filtered_data:
+        st.warning(f"No relevant data found in {source}.")
     else:
-        st.write(f"Retrieved {len(rag_data)} items from {source}.")
-    return rag_data
+        st.write(f"Retrieved {len(filtered_data)} relevant items from {source}.")
+    return filtered_data
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
@@ -58,7 +63,7 @@ def call_openai_gpt4(prompt):
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "system", "content": "You are a professional assistant generating financial newsletters."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -130,10 +135,10 @@ def fetch_and_update_ticker_trends_data():
 
 def generate_newsletter_with_accuracy():
     """Generate the newsletter using RAG and measure its accuracy."""
-    company_insights = retrieve_from_chromadb("news_sentiment_data", "Company performance insights", top_k=5)
+    company_insights = retrieve_from_chromadb("news_sentiment_data", "Detailed insights about company performance", top_k=10)
     company_insights = validate_rag_data(company_insights, "News Sentiment Data")
 
-    market_trends = retrieve_from_chromadb("ticker_trends_data", "Market trends insights", top_k=5)
+    market_trends = retrieve_from_chromadb("ticker_trends_data", "Key market trends and top performers", top_k=10)
     market_trends = validate_rag_data(market_trends, "Ticker Trends Data")
 
     if not company_insights or not market_trends:
@@ -141,19 +146,19 @@ def generate_newsletter_with_accuracy():
         return
 
     summarized_insights = call_openai_gpt4(f"""
-    Summarize the following company insights for a professional newsletter:
-    {company_insights}
+    Summarize the following company insights in detail, focusing on key metrics, growth trends, and highlights:
+    {json.dumps(company_insights, indent=2)}
     """)
 
     summarized_trends = call_openai_gpt4(f"""
-    Summarize the following market trends, including top gainers and losers, for a professional newsletter:
-    {market_trends}
+    Summarize the following market trends, highlighting significant gainers, losers, and trading volumes:
+    {json.dumps(market_trends, indent=2)}
     """)
 
     prompt = f"""
-    Generate a professional daily newsletter with:
-    - Key Company Insights: {summarized_insights}
-    - Major Market Trends: {summarized_trends}
+    Create a professional daily newsletter. Include:
+    1. Key Company Insights: {summarized_insights}
+    2. Major Market Trends: {summarized_trends}
     """
     newsletter = call_openai_gpt4(prompt)
     st.subheader("Generated Newsletter")
