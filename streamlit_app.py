@@ -9,6 +9,9 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
 
@@ -82,6 +85,7 @@ def call_openai_gpt4(prompt):
                 {"role": "user", "content": prompt}
             ]
         )
+        # Extract the message content as a single value
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"Error: {str(e)}"
