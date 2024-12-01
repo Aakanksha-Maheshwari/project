@@ -11,30 +11,23 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import os
 
-# Environment setup
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# Initialize ChromaDB Persistent Client
+# Initialize Clients and Keys
 client = chromadb.PersistentClient()
-
-# Access keys from secrets.toml
-alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
 bespoke_key = st.secrets["bespoke_labs"]["api_key"]
-
-# Initialize Bespoke Labs
-bespoke = BespokeLabs(auth_token=bespoke_key)
+bl = BespokeLabs(auth_token=bespoke_key)
 
 # API URLs
-news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
-tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
+news_url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={st.secrets['alpha_vantage']['api_key']}&limit=50"
+tickers_url = f"https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={st.secrets['alpha_vantage']['api_key']}"
 
-# Streamlit App Title
+# App Title
 st.title("Multi-Agent Financial Newsletter Application")
+
 
 ### Helper Functions ###
 def fetch_data(api_url):
-    """Fetch data from API."""
+    """Fetch data from an API."""
     try:
         response = requests.get(api_url)
         response.raise_for_status()
@@ -43,133 +36,133 @@ def fetch_data(api_url):
         st.error(f"Error fetching data: {e}")
         return None
 
+
 def store_data_in_chromadb(data, collection_name):
     """Store data in ChromaDB."""
-    if not data:
-        st.warning(f"No data to store for collection: {collection_name}")
+    if not data or "feed" not in data:
+        st.warning(f"No valid data for {collection_name}")
         return
 
     collection = client.get_or_create_collection(collection_name)
-    for i, item in enumerate(data.get("feed", []), start=1):
+    for i, item in enumerate(data["feed"], start=1):
         try:
             collection.add(
                 ids=[str(i)],
                 documents=[json.dumps(item)],
-                metadatas=[{"source": item.get("source", "N/A")}]
+                metadatas=[{"source": item.get("source", "N/A")}],
             )
         except Exception as e:
-            st.error(f"Error storing data: {e}")
+            st.error(f"Error storing data in {collection_name}: {e}")
+
 
 def retrieve_data(collection_name, query_text, top_k=5):
-    """Retrieve data from ChromaDB using similarity search."""
+    """Retrieve data from ChromaDB."""
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
-
-        # Ensure each document is JSON-deserialized
-        documents = []
-        for doc in results["documents"]:
-            if isinstance(doc, str):
-                documents.append(json.loads(doc))  # Deserialize JSON string
-            elif isinstance(doc, dict):
-                documents.append(doc)  # Already a dictionary
-            else:
-                st.warning(f"Skipping unexpected document format: {type(doc)}")
-        
-        return documents
+        return [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"]]
     except Exception as e:
-        st.error(f"Error retrieving data from ChromaDB for {collection_name}: {e}")
+        st.error(f"Error retrieving data: {e}")
         return []
 
 
-def call_openai_gpt4(prompt):
-    """Call OpenAI GPT-4."""
+def call_openai(prompt):
+    """Call OpenAI for generating text."""
     try:
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "system", "content": "You are an assistant."},
-                      {"role": "user", "content": prompt}]
+            messages=[
+                {"role": "system", "content": "You are a financial assistant."},
+                {"role": "user", "content": prompt},
+            ],
         )
-        return response.choices[0].message.content.strip()
+        return response.choices[0].message["content"]
     except Exception as e:
-        st.error(f"Error with GPT-4: {e}")
-        return None
+        st.error(f"Error calling OpenAI: {e}")
+        return "Error generating response."
 
-def evaluate_with_bespoke(newsletter, data):
-    """Evaluate accuracy with Bespoke Labs."""
+
+def assess_accuracy(newsletter, data):
+    """Assess newsletter accuracy using Bespoke Labs."""
     try:
-        response = bespoke.minicheck.factcheck.create(claim=newsletter, context=json.dumps(data))
-        return response.support_prob * 100 if response.support_prob else 0
+        response = bl.minicheck.factcheck.create(claim=newsletter, context=json.dumps(data))
+        return round(response.support_prob * 100, 2) if hasattr(response, "support_prob") else 0
     except Exception as e:
-        st.error(f"Error evaluating with Bespoke: {e}")
+        st.error(f"Error with Bespoke Labs: {e}")
         return 0
 
-### Multi-Agent System ###
+
+### Agents ###
 class CompanyAnalystAgent:
-    """Agent for analyzing company performance."""
+    """Analyze company performance."""
     def process(self):
-        collection_name = "company_data"
         data = fetch_data(news_url)
-        store_data_in_chromadb(data, collection_name)
-        return retrieve_data(collection_name, "Company performance insights")
+        store_data_in_chromadb(data, "company_data")
+        return retrieve_data("company_data", "Company performance insights")
+
 
 class MarketTrendsAnalystAgent:
-    """Agent for analyzing market trends."""
+    """Analyze market trends."""
     def process(self):
-        collection_name = "market_data"
         data = fetch_data(tickers_url)
-        store_data_in_chromadb(data, collection_name)
-        return retrieve_data(collection_name, "Market trends insights")
+        store_data_in_chromadb(data, "market_data")
+        return retrieve_data("market_data", "Market trends insights")
+
 
 class RiskManagementAgent:
-    """Agent for assessing risks."""
-    def analyze(self, company_data, market_data):
+    """Analyze risks based on company and market data."""
+    def process(self, company_data, market_data):
+        if not company_data and not market_data:
+            return "No risk data available."
+        
         prompt = f"""
-        Analyze the following data for potential risks:
+        Analyze the following data for risks:
         Company Data: {json.dumps(company_data)}
         Market Data: {json.dumps(market_data)}
-        Provide insights on risks for investors.
         """
-        return call_openai_gpt4(prompt)
+        return call_openai(prompt)
+
 
 class NewsletterAgent:
-    """Agent for generating a financial newsletter."""
-    def generate(self, company_summary, market_summary, risk_summary):
+    """Generate the newsletter."""
+    def process(self, company_summary, market_summary, risk_summary):
         prompt = f"""
-        Create a financial newsletter combining:
+        Create a financial newsletter:
         - Company Insights: {company_summary}
         - Market Trends: {market_summary}
         - Risk Analysis: {risk_summary}
         """
-        return call_openai_gpt4(prompt)
+        return call_openai(prompt)
+
 
 ### Main Logic ###
 if st.button("Generate Financial Newsletter"):
+    # Company Analyst Agent
     st.subheader("Company Analyst Agent")
     company_agent = CompanyAnalystAgent()
     company_data = company_agent.process()
     st.write(f"Company Data: {len(company_data)} records retrieved.")
 
+    # Market Trends Analyst Agent
     st.subheader("Market Trends Analyst Agent")
     market_agent = MarketTrendsAnalystAgent()
     market_data = market_agent.process()
     st.write(f"Market Data: {len(market_data)} records retrieved.")
 
+    # Risk Management Agent
     st.subheader("Risk Management Agent")
     risk_agent = RiskManagementAgent()
-    risk_summary = risk_agent.analyze(company_data, market_data)
+    risk_summary = risk_agent.process(company_data, market_data)
     st.write(f"Risk Summary: {risk_summary}")
 
+    # Newsletter Agent
     st.subheader("Newsletter Agent")
     newsletter_agent = NewsletterAgent()
-    newsletter = newsletter_agent.generate(
-        json.dumps(company_data),
-        json.dumps(market_data),
-        risk_summary
-    )
+    newsletter = newsletter_agent.process(company_data, market_data, risk_summary)
     st.markdown(newsletter)
 
+    # Accuracy Assessment
     st.subheader("Assessing Newsletter Accuracy")
     combined_data = company_data + market_data
-    accuracy = evaluate_with_bespoke(newsletter, combined_data)
+    accuracy = assess_accuracy(newsletter, combined_data)
     st.success(f"Newsletter Accuracy: {accuracy}%")
