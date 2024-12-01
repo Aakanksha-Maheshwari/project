@@ -21,7 +21,7 @@ news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={a
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Alpha Vantage RAG System with GPT-4-Mini")
+st.title("Enhanced RAG System with GPT-4-Mini")
 
 ### Helper Functions ###
 
@@ -46,15 +46,15 @@ def fetch_and_store(api_url, collection_name, key="feed", limit=50):
     except Exception as e:
         st.error(f"Error in fetching or storing data for {collection_name}: {e}")
 
-def retrieve_and_summarize(collection_name, query_text, top_k=5):
-    """Retrieve data from ChromaDB, summarize and return key insights."""
+def retrieve_and_summarize(collection_name, query_text, top_k=10):
+    """Retrieve data from ChromaDB and summarize."""
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
         documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"] if doc]
 
         if not documents:
-            return "No relevant data found."
+            return "No relevant data found.", []
 
         # Summarize the retrieved data
         summary_prompt = f"""
@@ -63,10 +63,10 @@ def retrieve_and_summarize(collection_name, query_text, top_k=5):
         {json.dumps(documents)}
         """
         summary = call_openai_gpt4(summary_prompt)
-        return summary
+        return summary, documents
     except Exception as e:
         st.error(f"Error retrieving from {collection_name}: {e}")
-        return "Error in data retrieval."
+        return "Error in data retrieval.", []
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4-mini to process the prompt."""
@@ -83,13 +83,17 @@ def call_openai_gpt4(prompt):
         st.error(f"Error calling OpenAI GPT-4-mini: {e}")
         return "Error generating response."
 
-def assess_accuracy(newsletter, context):
-    """Assess the accuracy of the newsletter using a simulated model."""
+def assess_accuracy(newsletter, relevant_data):
+    """Assess the accuracy of the newsletter by comparing included insights with relevant data."""
     try:
-        # Placeholder for an accuracy assessment function
-        # Replace this with any custom logic or API integration to validate
-        accuracy = len(newsletter) / (len(context) * 100)  # Mock logic
-        return round(accuracy * 100, 2)
+        included_insights = sum(1 for insight in relevant_data if insight['title'] in newsletter)
+        total_insights = len(relevant_data)
+
+        if total_insights == 0:
+            return 0
+
+        accuracy = (included_insights / total_insights) * 100
+        return round(accuracy, 2)
     except Exception as e:
         st.error(f"Error assessing accuracy: {e}")
         return 0
@@ -106,8 +110,8 @@ def fetch_and_store_ticker_trends_data():
 
 def generate_newsletter():
     """Generate a professional newsletter using retrieved data."""
-    news_summary = retrieve_and_summarize("news_sentiment_data", "Company performance insights", top_k=10)
-    trends_summary = retrieve_and_summarize("ticker_trends_data", "Top stock trends", top_k=10)
+    news_summary, news_data = retrieve_and_summarize("news_sentiment_data", "Company performance insights", top_k=10)
+    trends_summary, trends_data = retrieve_and_summarize("ticker_trends_data", "Top stock trends", top_k=10)
 
     if "No relevant data found" in (news_summary, trends_summary):
         st.error("Insufficient data for newsletter generation.")
@@ -126,8 +130,8 @@ def generate_newsletter():
     st.markdown(newsletter)
 
     # Assess accuracy
-    rag_data = [news_summary, trends_summary]
-    accuracy_score = assess_accuracy(newsletter, rag_data)
+    combined_data = news_data + trends_data
+    accuracy_score = assess_accuracy(newsletter, combined_data)
     st.success(f"Newsletter Accuracy: {accuracy_score}%")
 
 ### Main Page Buttons ###
