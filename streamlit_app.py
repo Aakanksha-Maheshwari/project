@@ -19,126 +19,141 @@ client = chromadb.PersistentClient()
 
 # Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
-openai_api_key = st.secrets["openai"]["api_key"]
+openai.api_key = st.secrets["openai"]["api_key"]
+bespoke_key = st.secrets["bespoke_labs"]["api_key"]
 
-# Initialize OpenAI client
-client_openai = OpenAI(api_key=openai_api_key)
+# Initialize Bespoke Labs
+bespoke = BespokeLabs(auth_token=bespoke_key)
 
-# API URLs for Alpha Vantage
+# API URLs
 news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Multi-Agent Financial Newsletter Generator with ChromaDB")
+st.title("Multi-Agent Financial Newsletter Application")
 
-def get_embedding(text, model="text-embedding-ada-002"):
-    """Generate an embedding for the given text using OpenAI."""
+### Helper Functions ###
+def fetch_data(api_url):
+    """Fetch data from API."""
     try:
-        text = text.replace("\n", " ")
-        response = client_openai.embeddings.create(input=[text], model=model)
-        # Log the embedding shape
-        st.write(f"Embedding shape: {len(response.data[0].embedding)}")
-        return response.data[0].embedding  # Correctly access the embedding attribute
-    except Exception as e:
-        st.error(f"Error generating embedding: {e}")
-        return None
-
-def fetch_data_from_api(api_url):
-    """Fetch data from Alpha Vantage API and return the JSON response."""
-    try:
-        st.info(f"Fetching data from {api_url}...")
         response = requests.get(api_url)
         response.raise_for_status()
-        data = response.json()
-        st.write(f"API response: {data}")  # Debugging
-        return data
+        return response.json()
     except Exception as e:
-        st.error(f"Error fetching data from API: {e}")
+        st.error(f"Error fetching data: {e}")
         return None
 
-def store_data_in_chromadb(api_url, collection_name):
-    """Fetch data from API, generate embeddings, and store in ChromaDB."""
-    data = fetch_data_from_api(api_url)
-    if not data or "feed" not in data:
-        st.warning(f"No valid data returned for {collection_name}.")
+def store_data_in_chromadb(data, collection_name):
+    """Store data in ChromaDB."""
+    if not data:
+        st.warning(f"No data to store for collection: {collection_name}")
         return
 
     collection = client.get_or_create_collection(collection_name)
-    expected_dim = 1536  # Dimension size for text-embedding-ada-002
-
-    for i, item in enumerate(data["feed"], start=1):
-        summary = item.get('summary', '')
-        if not summary:
-            st.warning(f"Skipping record {i}: No summary found.")
-            continue
-
-        embedding = get_embedding(summary, model="text-embedding-ada-002")
-        if embedding is None:
-            st.warning(f"Skipping record {i}: Failed to generate embedding.")
-            continue
-
-        # Validate dimensions
-        if len(embedding) != expected_dim:
-            st.error(f"Skipping record {i}: Invalid embedding dimensions ({len(embedding)}).")
-            continue
-
+    for i, item in enumerate(data.get("feed", []), start=1):
         try:
             collection.add(
                 ids=[str(i)],
-                embeddings=[embedding],
                 documents=[json.dumps(item)],
                 metadatas=[{"source": item.get("source", "N/A")}]
             )
-            st.info(f"Record {i} added successfully.")
         except Exception as e:
-            st.error(f"Failed to add record {i} to ChromaDB: {e}")
+            st.error(f"Error storing data: {e}")
 
-def retrieve_data_from_chromadb(collection_name, query_text, top_k):
-    """Retrieve data from ChromaDB using similarity search."""
-    try:
-        collection = client.get_or_create_collection(collection_name)
-        query_embedding = get_embedding(query_text, model="text-embedding-ada-002")
-        if not query_embedding:
-            st.error("Failed to generate embedding for query text.")
-            return []
-
-        results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
-        documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"]]
-        return documents
-    except Exception as e:
-        st.error(f"Error retrieving data from ChromaDB for {collection_name}: {e}")
-        return []
+def retrieve_data(collection_name, query_text, top_k=5):
+    """Retrieve data from ChromaDB."""
+    collection = client.get_or_create_collection(collection_name)
+    results = collection.query(query_texts=[query_text], n_results=top_k)
+    return [json.loads(doc) for doc in results["documents"]]
 
 def call_openai_gpt4(prompt):
-    """Call OpenAI GPT-4 to process the prompt."""
+    """Call OpenAI GPT-4."""
     try:
-        st.info("Calling OpenAI GPT-4 for response...")
-        response = client_openai.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a financial newsletter generator."},
-                {"role": "user", "content": prompt}
-            ]
+            messages=[{"role": "system", "content": "You are an assistant."},
+                      {"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"Error calling GPT-4: {e}")
-        return f"Error: {str(e)}"
+        st.error(f"Error with GPT-4: {e}")
+        return None
 
-def cosine_similarity(vec1, vec2):
-    """Compute the cosine similarity between two vectors."""
-    dot_product = sum(a * b for a, b in zip(vec1, vec2))
-    magnitude = (sum(a ** 2 for a in vec1) ** 0.5) * (sum(b ** 2 for b in vec2) ** 0.5)
-    return dot_product / magnitude if magnitude else 0
+def evaluate_with_bespoke(newsletter, data):
+    """Evaluate accuracy with Bespoke Labs."""
+    try:
+        response = bespoke.minicheck.factcheck.create(claim=newsletter, context=json.dumps(data))
+        return response.support_prob * 100 if response.support_prob else 0
+    except Exception as e:
+        st.error(f"Error evaluating with Bespoke: {e}")
+        return 0
+
+### Multi-Agent System ###
+class CompanyAnalystAgent:
+    """Agent for analyzing company performance."""
+    def process(self):
+        collection_name = "company_data"
+        data = fetch_data(news_url)
+        store_data_in_chromadb(data, collection_name)
+        return retrieve_data(collection_name, "Company performance insights")
+
+class MarketTrendsAnalystAgent:
+    """Agent for analyzing market trends."""
+    def process(self):
+        collection_name = "market_data"
+        data = fetch_data(tickers_url)
+        store_data_in_chromadb(data, collection_name)
+        return retrieve_data(collection_name, "Market trends insights")
+
+class RiskManagementAgent:
+    """Agent for assessing risks."""
+    def analyze(self, company_data, market_data):
+        prompt = f"""
+        Analyze the following data for potential risks:
+        Company Data: {json.dumps(company_data)}
+        Market Data: {json.dumps(market_data)}
+        Provide insights on risks for investors.
+        """
+        return call_openai_gpt4(prompt)
+
+class NewsletterAgent:
+    """Agent for generating a financial newsletter."""
+    def generate(self, company_summary, market_summary, risk_summary):
+        prompt = f"""
+        Create a financial newsletter combining:
+        - Company Insights: {company_summary}
+        - Market Trends: {market_summary}
+        - Risk Analysis: {risk_summary}
+        """
+        return call_openai_gpt4(prompt)
 
 ### Main Logic ###
-
 if st.button("Generate Financial Newsletter"):
-    with Manager() as manager:
-        output_queue = manager.Queue()
+    st.subheader("Company Analyst Agent")
+    company_agent = CompanyAnalystAgent()
+    company_data = company_agent.process()
+    st.write(f"Company Data: {len(company_data)} records retrieved.")
 
-        # Populate ChromaDB with data from Alpha Vantage
-        store_data_in_chromadb(news_url, "news_sentiment_data")
-        store_data_in_chromadb(tickers_url, "ticker_trends_data")
+    st.subheader("Market Trends Analyst Agent")
+    market_agent = MarketTrendsAnalystAgent()
+    market_data = market_agent.process()
+    st.write(f"Market Data: {len(market_data)} records retrieved.")
 
-        st.write("Data fetching completed. Proceed to summarization.")
+    st.subheader("Risk Management Agent")
+    risk_agent = RiskManagementAgent()
+    risk_summary = risk_agent.analyze(company_data, market_data)
+    st.write(f"Risk Summary: {risk_summary}")
+
+    st.subheader("Newsletter Agent")
+    newsletter_agent = NewsletterAgent()
+    newsletter = newsletter_agent.generate(
+        json.dumps(company_data),
+        json.dumps(market_data),
+        risk_summary
+    )
+    st.markdown(newsletter)
+
+    st.subheader("Assessing Newsletter Accuracy")
+    combined_data = company_data + market_data
+    accuracy = evaluate_with_bespoke(newsletter, combined_data)
+    st.success(f"Newsletter Accuracy: {accuracy}%")
