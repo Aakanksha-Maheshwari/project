@@ -44,17 +44,27 @@ def retrieve_from_chromadb(collection_name, query, top_k=10):
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
+def filter_by_relevance_and_sentiment(data, min_relevance=0.7, min_sentiment=0.2):
+    """Filter data by relevance and sentiment score thresholds."""
+    filtered_data = [
+        item for item in data
+        if all(
+            topic.get("relevance_score", 0) >= min_relevance for topic in item.get("topics", [])
+        ) and item.get("overall_sentiment_score", 0) >= min_sentiment
+    ]
+    return filtered_data
+
 def validate_rag_data(rag_data, source):
     """Validate and filter RAG data for relevance."""
     if not rag_data:
         st.warning(f"No data retrieved from {source}.")
         return []
 
-    filtered_data = [item for item in rag_data if item]  # Filter non-empty
+    filtered_data = filter_by_relevance_and_sentiment(rag_data)
     if not filtered_data:
-        st.warning(f"No relevant data found in {source}.")
+        st.warning(f"No highly relevant or positive sentiment data found in {source}.")
     else:
-        st.write(f"Retrieved {len(filtered_data)} items from {source}.")
+        st.write(f"Retrieved {len(filtered_data)} high-quality items from {source}.")
     return filtered_data
 
 def call_openai_gpt4(prompt):
@@ -84,7 +94,7 @@ def assess_accuracy_with_bespoke(newsletter, rag_data):
             st.error("Bespoke Labs response does not contain 'support_prob'.")
             return 0
 
-        st.write("Bespoke Labs Response:", response)
+        st.write("Bespoke Labs Response:", response)  # Debugging
         return round(support_prob * 100, 2)
     except Exception as e:
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
@@ -105,6 +115,7 @@ def fetch_and_update_news_data():
                     documents=[json.dumps(item)],
                     metadatas=[{"source": item.get("source", "N/A")}]
                 )
+            st.write("Number of documents in News Sentiment Data:", collection.count())
             st.success("News data updated in ChromaDB.")
         else:
             st.warning("No 'feed' key or empty response from News API.")
@@ -117,8 +128,8 @@ def fetch_and_update_ticker_trends_data():
         response = requests.get(tickers_url)
         response.raise_for_status()
         data = response.json()
+        st.write("Ticker Trends API Response:", data)
         if "top_gainers" in data:
-            st.write("Ticker Trends API Response Sample:", data["top_gainers"][:3])  # Sample preview
             collection = client.get_or_create_collection("ticker_trends_data")
             collection.add(
                 ids=[str(i) for i in range(len(data["top_gainers"]))],
@@ -127,11 +138,15 @@ def fetch_and_update_ticker_trends_data():
             )
             st.success("Ticker trends data updated in ChromaDB.")
         else:
-            st.warning("No 'top_gainers' key or empty response from Ticker Trends API.")
+            st.error("Invalid data format received from API.")
     except Exception as e:
         st.error(f"Error updating ticker trends data: {e}")
 
 ### Newsletter Generation ###
+
+def generate_fallback_newsletter():
+    """Generate a fallback newsletter when no RAG data is available."""
+    return "No relevant financial data available. Please check back later for updates."
 
 def generate_newsletter_with_accuracy():
     """Generate the newsletter using RAG and measure its accuracy."""
@@ -143,6 +158,9 @@ def generate_newsletter_with_accuracy():
 
     if not company_insights and not market_trends:
         st.error("No relevant data available for newsletter generation.")
+        fallback_newsletter = generate_fallback_newsletter()
+        st.subheader("Fallback Newsletter")
+        st.markdown(fallback_newsletter)
         return
 
     summarized_insights = call_openai_gpt4(f"Summarize the following company insights:\n{json.dumps(company_insights)}")
@@ -150,8 +168,8 @@ def generate_newsletter_with_accuracy():
 
     prompt = f"""
     Generate a professional newsletter with:
-    - Key Company Insights: {summarized_insights}
-    - Major Market Trends: {summarized_trends}
+    1. Key Company Insights: {summarized_insights}
+    2. Major Market Trends: {summarized_trends}
     """
     newsletter = call_openai_gpt4(prompt)
     st.subheader("Generated Newsletter")
