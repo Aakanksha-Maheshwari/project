@@ -10,17 +10,6 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import os
-import streamlit as st
-import requests
-import json
-import openai
-from bespokelabs import BespokeLabs
-import chromadb
-import sys
-
-# Fix for SQLite import
-__import__('pysqlite3')
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 # Initialize Clients and Keys
 client = chromadb.PersistentClient()
@@ -87,11 +76,13 @@ def retrieve_data(collection_name, query_text, top_k=5):
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
-        # Parse each document only if it's a JSON string
-        return [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"]]
+        documents = results.get("documents", [])
+        st.write(f"Retrieved {len(documents)} documents from {collection_name}.")
+        return [json.loads(doc) if isinstance(doc, str) else doc for doc in documents]
     except Exception as e:
         st.error(f"Error retrieving data from {collection_name}: {e}")
         return []
+
 
 
 def call_openai(prompt):
@@ -117,18 +108,24 @@ def summarize_highlights(data, category):
     if not data:
         return f"No {category} data available."
 
-    # Extract key fields for summarization
+    # Prepare extracted data for summarization
     extracted_data = []
     for record in data:
-        name = record.get("ticker", record.get("name", "Unknown"))
-        sentiment = record.get("overall_sentiment_score", "Neutral")
-        price = record.get("price", "N/A")
-        details = record.get("summary", "No details available.")
-        extracted_data.append(f"{name}: Sentiment - {sentiment}, Price - {price}. {details}")
+        if isinstance(record, dict):  # Ensure each record is a dictionary
+            name = record.get("ticker", record.get("name", "Unknown"))
+            sentiment = record.get("overall_sentiment_score", "Neutral")
+            price = record.get("price", "N/A")
+            details = record.get("summary", "No details available.")
+            extracted_data.append(f"{name}: Sentiment - {sentiment}, Price - {price}. {details}")
+        else:
+            st.warning(f"Invalid record format: {record}")
+
+    if not extracted_data:
+        return f"No valid {category} data available for summarization."
 
     # Use GPT to summarize highlights
     try:
-        prompt = f"Summarize the following {category} data highlights:\n" + "\n".join(extracted_data)
+        prompt = f"Summarize the following {category} data highlights:\n" + "\n".join(extracted_data[:10])
         summary = call_openai(prompt)
         return summary
     except Exception as e:
