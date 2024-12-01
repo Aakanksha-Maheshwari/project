@@ -2,14 +2,12 @@ import streamlit as st
 import requests
 import json
 import openai
-from bespokelabs import BespokeLabs
+from bespokelabs import BespokeLabs, DefaultHttpxClient
 import httpx
-import chromadb
-import sys
-
-# Ensure ChromaDB uses pysqlite3
 __import__('pysqlite3')
+import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+import chromadb
 
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
@@ -27,31 +25,42 @@ news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={a
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Alpha Vantage Multi-Agent System with RAG, OpenAI GPT-4, and Bespoke Labs")
+st.title("Improved RAG System with Alpha Vantage, OpenAI, and Bespoke Labs")
 
 ### Helper Functions ###
 
-def retrieve_from_chromadb(collection_name, query, top_k=10):
-    """Retrieve relevant documents from ChromaDB."""
-    collection = client.get_or_create_collection(collection_name)
+def fetch_and_store_data(api_url, collection_name, key="feed"):
+    """Fetch data from API and store it in ChromaDB."""
     try:
-        results = collection.query(
-            query_texts=[query],
-            n_results=top_k
-        )
+        response = requests.get(api_url)
+        response.raise_for_status()
+        data = response.json()
+        st.write(f"Raw API Response for {collection_name}:", data)  # Debugging
+
+        if key in data and data[key]:
+            collection = client.get_or_create_collection(collection_name)
+            for i, item in enumerate(data[key], start=1):
+                collection.add(
+                    ids=[str(i)],
+                    documents=[json.dumps(item)],
+                    metadatas=[{"source": item.get("source", "Unknown")}]
+                )
+            st.success(f"Data updated in {collection_name}. Total documents: {collection.count()}")
+        else:
+            st.warning(f"No '{key}' key or empty response for {collection_name}.")
+    except Exception as e:
+        st.error(f"Error fetching or updating {collection_name}: {e}")
+
+def retrieve_data(collection_name, query_text, top_k=10):
+    """Retrieve data from ChromaDB based on a query."""
+    try:
+        collection = client.get_or_create_collection(collection_name)
+        results = collection.query(query_texts=[query_text], n_results=top_k)
+        st.write(f"Raw results from {collection_name}:", results)  # Debugging
         return [json.loads(doc) if isinstance(doc, str) else doc for doc in results['documents'] if doc]
     except Exception as e:
-        st.error(f"Error retrieving data from ChromaDB: {e}")
+        st.error(f"Error retrieving data from {collection_name}: {e}")
         return []
-
-def validate_rag_data(rag_data, source):
-    """Validate RAG data for completeness."""
-    if not rag_data:
-        st.warning(f"No data retrieved from {source}.")
-        return []
-
-    st.write(f"Retrieved {len(rag_data)} items from {source}.")
-    return rag_data
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
@@ -86,90 +95,42 @@ def assess_accuracy_with_bespoke(newsletter, rag_data):
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
 
-def fetch_and_update_news_data():
-    """Fetch news data from the API and update ChromaDB."""
-    try:
-        response = requests.get(news_url)
-        response.raise_for_status()
-        data = response.json()
-        if 'feed' in data and data['feed']:
-            st.write("Fetched News Data Sample:", data['feed'][:3])  # Sample preview
-            collection = client.get_or_create_collection("news_sentiment_data")
-            for i, item in enumerate(data['feed'], start=1):
-                collection.add(
-                    ids=[str(i)],
-                    documents=[json.dumps(item)],
-                    metadatas=[{"source": item.get("source", "N/A")}]
-                )
-            st.write("Number of documents in News Sentiment Data:", collection.count())
-            st.success("News data updated in ChromaDB.")
-        else:
-            st.warning(f"No 'feed' key or empty response from News API. Raw response: {data}")
-    except Exception as e:
-        st.error(f"Error fetching or updating news data: {e}")
+def generate_newsletter():
+    """Generate a professional newsletter using retrieved data and LLM."""
+    news_data = retrieve_data("news_sentiment_data", "Company performance insights", top_k=10)
+    trends_data = retrieve_data("ticker_trends_data", "Market trends insights", top_k=10)
 
-def fetch_and_update_ticker_trends_data():
-    """Fetch ticker trends data from the API and update ChromaDB."""
-    try:
-        response = requests.get(tickers_url)
-        response.raise_for_status()
-        data = response.json()
-        st.write("Ticker Trends API Response:", data)
-        if "top_gainers" in data:
-            collection = client.get_or_create_collection("ticker_trends_data")
-            for i, item in enumerate(data["top_gainers"], start=1):
-                collection.add(
-                    ids=[str(i)],
-                    documents=[json.dumps(item)],
-                    metadatas=[{"type": "gainer"}]
-                )
-            st.success("Ticker trends data updated in ChromaDB.")
-        else:
-            st.error("Invalid data format received from API.")
-    except Exception as e:
-        st.error(f"Error updating ticker trends data: {e}")
-
-def generate_fallback_newsletter():
-    """Generate a fallback newsletter when no RAG data is available."""
-    return "No relevant financial data available. Please check back later for updates."
-
-def generate_newsletter_with_accuracy():
-    """Generate the newsletter using RAG and measure its accuracy."""
-    company_insights = retrieve_from_chromadb("news_sentiment_data", "Company performance insights", top_k=10)
-    company_insights = validate_rag_data(company_insights, "News Sentiment Data")
-
-    market_trends = retrieve_from_chromadb("ticker_trends_data", "Market trends insights", top_k=10)
-    market_trends = validate_rag_data(market_trends, "Ticker Trends Data")
-
-    if not company_insights and not market_trends:
+    if not news_data and not trends_data:
         st.error("No relevant data available for newsletter generation.")
-        fallback_newsletter = generate_fallback_newsletter()
         st.subheader("Fallback Newsletter")
-        st.markdown(fallback_newsletter)
+        st.markdown("No relevant financial data available. Please check back later for updates.")
         return
 
-    summarized_insights = call_openai_gpt4(f"Summarize the following company insights:\n{json.dumps(company_insights)}")
-    summarized_trends = call_openai_gpt4(f"Summarize the following market trends:\n{json.dumps(market_trends)}")
+    # Prepare context for LLM
+    summarized_news = call_openai_gpt4(f"Summarize the following news data:\n{json.dumps(news_data)}")
+    summarized_trends = call_openai_gpt4(f"Summarize the following market trends:\n{json.dumps(trends_data)}")
 
-    prompt = f"""
-    Generate a professional newsletter with:
-    1. Key Company Insights: {summarized_insights}
+    # Generate newsletter
+    newsletter_prompt = f"""
+    Generate a professional financial newsletter with:
+    1. Key Company Insights: {summarized_news}
     2. Major Market Trends: {summarized_trends}
     """
-    newsletter = call_openai_gpt4(prompt)
+    newsletter = call_openai_gpt4(newsletter_prompt)
     st.subheader("Generated Newsletter")
     st.markdown(newsletter)
 
-    rag_context = company_insights + market_trends
-    accuracy_score = assess_accuracy_with_bespoke(newsletter, rag_context)
+    # Assess accuracy
+    combined_data = news_data + trends_data
+    accuracy_score = assess_accuracy_with_bespoke(newsletter, combined_data)
     st.success(f"Newsletter Accuracy: {accuracy_score}%")
 
 ### Main Page Buttons ###
 if st.button("Fetch and Store News Data"):
-    fetch_and_update_news_data()
+    fetch_and_store_data(news_url, "news_sentiment_data", key="feed")
 
-if st.button("Fetch and Store Trends Data"):
-    fetch_and_update_ticker_trends_data()
+if st.button("Fetch and Store Ticker Trends Data"):
+    fetch_and_store_data(tickers_url, "ticker_trends_data", key="top_gainers")
 
 if st.button("Generate Newsletter and Measure Accuracy"):
-    generate_newsletter_with_accuracy()
+    generate_newsletter()
