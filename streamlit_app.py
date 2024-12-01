@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import json
 from multiprocessing import Process, Manager, Queue
-from openai import OpenAI
+import openai
 from bespokelabs import BespokeLabs, DefaultHttpxClient
 import httpx
 __import__('pysqlite3')
