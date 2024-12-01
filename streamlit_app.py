@@ -1,15 +1,12 @@
 import streamlit as st
 import requests
 import json
-from multiprocessing import Process, Manager, Queue
 import openai
-from bespokelabs import BespokeLabs, DefaultHttpxClient
-import httpx
+from bespokelabs import BespokeLabs
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
-import os
 
 # Initialize Clients and Keys
 client = chromadb.PersistentClient()
@@ -25,22 +22,18 @@ tickers_url = f"https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 # App Title
 st.title("Multi-Agent Financial Newsletter Application")
 
+
 ### Helper Functions ###
+
 def fetch_data(api_url):
     """Fetch data from an API."""
     try:
         response = requests.get(api_url)
         response.raise_for_status()
-        data = response.json()
-        st.write(f"Fetched Data from: {api_url}")
-        return data
+        return response.json()
     except requests.exceptions.RequestException as e:
-        st.error(f"API request error: {e}")
+        st.error(f"Error fetching data from API: {e}")
         return None
-    except json.JSONDecodeError as e:
-        st.error(f"Error parsing API response: {e}")
-        return None
-
 
 def store_data_in_chromadb(data, collection_name, record_keys):
     """Store structured data in ChromaDB."""
@@ -54,7 +47,7 @@ def store_data_in_chromadb(data, collection_name, record_keys):
             records.extend(data[key])
 
     if not records:
-        st.warning(f"No records found in the data for keys: {record_keys}")
+        st.warning(f"No records found for keys: {record_keys}")
         return
 
     collection = client.get_or_create_collection(collection_name)
@@ -62,7 +55,7 @@ def store_data_in_chromadb(data, collection_name, record_keys):
         try:
             collection.add(
                 ids=[str(i)],
-                documents=[json.dumps(record)],  # Convert record to JSON string
+                documents=[json.dumps(record)],
                 metadatas=[{"source": record.get("source", "N/A")}]
             )
         except Exception as e:
@@ -70,20 +63,16 @@ def store_data_in_chromadb(data, collection_name, record_keys):
 
     st.success(f"Stored {len(records)} records in {collection_name}.")
 
-
 def retrieve_data(collection_name, query_text, top_k=5):
     """Retrieve data from ChromaDB."""
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
         documents = results.get("documents", [])
-        st.write(f"Retrieved {len(documents)} documents from {collection_name}.")
         return [json.loads(doc) if isinstance(doc, str) else doc for doc in documents]
     except Exception as e:
         st.error(f"Error retrieving data from {collection_name}: {e}")
         return []
-
-
 
 def call_openai(prompt):
     """Call OpenAI for text generation."""
@@ -100,101 +89,61 @@ def call_openai(prompt):
         st.error(f"Error calling OpenAI: {e}")
         return "Error generating response."
 
-
 def summarize_highlights(data, category):
-    """
-    Summarize highlights for company or market data using OpenAI GPT.
-    """
+    """Summarize highlights for company or market data."""
     if not data:
         return f"No {category} data available."
 
-    # Prepare extracted data for summarization
-    extracted_data = []
+    highlights = []
     for record in data:
-        if isinstance(record, dict):  # Ensure each record is a dictionary
-            name = record.get("ticker", record.get("name", "Unknown"))
-            sentiment = record.get("overall_sentiment_score", "Neutral")
-            price = record.get("price", "N/A")
-            details = record.get("summary", "No details available.")
-            extracted_data.append(f"{name}: Sentiment - {sentiment}, Price - {price}. {details}")
+        if isinstance(record, dict):
+            name = record.get("ticker", record.get("title", "Unknown"))
+            sentiment = record.get("overall_sentiment_label", "Neutral")
+            details = record.get("summary", "Details not available.")
+            highlights.append(f"{name}: {sentiment} - {details}")
         else:
             st.warning(f"Invalid record format: {record}")
 
-    if not extracted_data:
+    if not highlights:
         return f"No valid {category} data available for summarization."
 
-    # Use GPT to summarize highlights
-    try:
-        prompt = f"Summarize the following {category} data highlights:\n" + "\n".join(extracted_data[:10])
-        summary = call_openai(prompt)
-        return summary
-    except Exception as e:
-        st.error(f"Error summarizing {category} highlights: {e}")
-        return f"Could not summarize {category} highlights."
-
+    return "\n".join(highlights[:5])  # Limit to top 5 highlights
 
 def summarize_risks(company_data, market_data):
-    """
-    Analyze risks and generate a summary using OpenAI GPT.
-    """
+    """Analyze and summarize risks."""
     if not company_data and not market_data:
         return "No risk data available."
 
-    try:
-        prompt = f"""
-        Analyze the following data for risks and summarize:
-        - Company Data: {json.dumps(company_data[:5], indent=2)} 
-        - Market Data: {json.dumps(market_data[:5], indent=2)}
-        """
-        risk_summary = call_openai(prompt)
-        return risk_summary
-    except Exception as e:
-        st.error(f"Error summarizing risks: {e}")
-        return "Risk analysis failed."
-
+    prompt = f"""
+    Analyze the following data for risks:
+    - Company Data: {json.dumps(company_data[:5], indent=2)} 
+    - Market Data: {json.dumps(market_data[:5], indent=2)}
+    """
+    return call_openai(prompt)
 
 def assess_accuracy_with_bespoke(newsletter, company_data, market_data):
-    """
-    Assess the accuracy of the newsletter using Bespoke Labs.
-    Filters and summarizes the company and market data for relevance.
-    """
+    """Assess accuracy using Bespoke Labs."""
     try:
-        # Filter and summarize the context
-        def summarize_context(data, category):
-            summaries = []
-            for record in data:
-                if isinstance(record, dict):
-                    ticker = record.get("ticker", "Unknown")
-                    sentiment = record.get("overall_sentiment_label", "Neutral")
-                    summary = record.get("summary", "No details available.")
-                    summaries.append(f"{ticker}: {sentiment} - {summary}")
-            return f"{category} Data Highlights:\n" + "\n".join(summaries[:5])  # Limit to top 5 highlights
-
-        company_summary = summarize_context(company_data, "Company")
-        market_summary = summarize_context(market_data, "Market")
-
-        # Prepare context for Bespoke Labs
-        context = f"{company_summary}\n\n{market_summary}"
-
-        # Fact-check with Bespoke Labs
-        response = bl.minicheck.factcheck.create(
-            claim=newsletter,
-            context=context
-        )
+        context = f"""
+        Company Highlights:
+        {summarize_highlights(company_data, 'Company')}
+        
+        Market Highlights:
+        {summarize_highlights(market_data, 'Market')}
+        """
+        response = bl.minicheck.factcheck.create(claim=newsletter, context=context)
         support_prob = getattr(response, "support_prob", None)
         if support_prob is None:
             st.error("No support probability found in Bespoke Labs response.")
             return 0
-
-        st.write("Bespoke Labs Response:", response)
         return round(support_prob * 100, 2)
     except Exception as e:
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
 
 
-
 ### Agents ###
+
 class CompanyAnalystAgent:
     """Analyze company performance."""
     def process(self):
@@ -203,7 +152,6 @@ class CompanyAnalystAgent:
             store_data_in_chromadb(data, "company_data", ["feed"])
             return retrieve_data("company_data", "Company performance insights")
         return []
-
 
 class MarketTrendsAnalystAgent:
     """Analyze market trends."""
@@ -216,48 +164,42 @@ class MarketTrendsAnalystAgent:
 
 
 ### Main Logic ###
+
 if st.button("Generate Financial Newsletter"):
     try:
         # Company Analyst Agent
         st.subheader("Company Analyst Agent")
         company_agent = CompanyAnalystAgent()
         company_data = company_agent.process()
-        st.write(f"Retrieved {len(company_data)} company records.")
-
-        # Summarize Company Highlights
-        st.subheader("Company Highlights")
         company_summary = summarize_highlights(company_data, "Company")
-        st.markdown(company_summary)
+        st.markdown(f"### Company Highlights\n{company_summary}")
 
         # Market Trends Analyst Agent
         st.subheader("Market Trends Analyst Agent")
         market_agent = MarketTrendsAnalystAgent()
         market_data = market_agent.process()
-        st.write(f"Retrieved {len(market_data)} market records.")
-
-        # Summarize Market Highlights
-        st.subheader("Market Highlights")
         market_summary = summarize_highlights(market_data, "Market")
-        st.markdown(market_summary)
+        st.markdown(f"### Market Highlights\n{market_summary}")
 
-        # Risk Management
+        # Risk Analysis
         st.subheader("Risk Management Summary")
         risk_summary = summarize_risks(company_data, market_data)
         st.write(risk_summary)
 
-        # Generate Newsletter
+        # Newsletter Generation
         st.subheader("Generated Financial Newsletter")
         newsletter = call_openai(f"""
-        Generate a professional financial newsletter with:
-        - Company Insights: {company_summary}
-        - Market Trends: {market_summary}
+        Generate a financial newsletter with:
+        - Company Highlights: {company_summary}
+        - Market Highlights: {market_summary}
         - Risk Analysis: {risk_summary}
         """)
         st.markdown(newsletter)
 
-                # Assess accuracy using Bespoke Labs
+        # Accuracy Assessment
         st.subheader("Accuracy Assessment")
         accuracy = assess_accuracy_with_bespoke(newsletter, company_data, market_data)
         st.success(f"Newsletter Accuracy: {accuracy}%")
+
     except Exception as e:
         st.error(f"Error during processing: {e}")
