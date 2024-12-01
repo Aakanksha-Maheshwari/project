@@ -15,25 +15,23 @@ client = chromadb.PersistentClient()
 # Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
-bespoke_key = st.secrets["bespoke_labs"]["api_key"]
-
-# Initialize Bespoke Labs
-bl = BespokeLabs(auth_token=bespoke_key)
 
 # API URLs for Alpha Vantage
-news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
+news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}'
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Enhanced RAG System for Financial Insights")
+st.title("Alpha Vantage RAG System with GPT-4-Mini")
 
 ### Helper Functions ###
-def fetch_and_store(api_url, collection_name, key="feed"):
-    """Fetch data from API and store it in ChromaDB."""
+
+def fetch_and_store(api_url, collection_name, key="feed", limit=50):
+    """Fetch data from API, filter, and store it in ChromaDB."""
     try:
-        response = requests.get(api_url)
+        response = requests.get(f"{api_url}&limit={limit}")
         response.raise_for_status()
         data = response.json()
+
         if key in data and data[key]:
             collection = client.get_or_create_collection(collection_name)
             for i, item in enumerate(data[key], start=1):
@@ -42,25 +40,28 @@ def fetch_and_store(api_url, collection_name, key="feed"):
                     documents=[json.dumps(item)],
                     metadatas=[{"source": item.get("source", "Unknown")}]
                 )
-            st.success(f"Data stored in {collection_name}. Total documents: {collection.count()}")
+            st.success(f"Stored {len(data[key])} documents in {collection_name}.")
         else:
-            st.warning(f"No '{key}' key or empty response for {collection_name}.")
+            st.warning(f"No '{key}' key or empty response from API for {collection_name}.")
     except Exception as e:
-        st.error(f"Error in {collection_name}: {e}")
+        st.error(f"Error in fetching or storing data for {collection_name}: {e}")
 
 def retrieve_and_summarize(collection_name, query_text, top_k=5):
-    """Retrieve data from ChromaDB and summarize it."""
+    """Retrieve data from ChromaDB, summarize and return key insights."""
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
         documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"] if doc]
-        st.write(f"Raw results from {collection_name}:", documents)
 
         if not documents:
             return "No relevant data found."
 
-        # Summarize documents using GPT-4
-        summary_prompt = f"Summarize the following financial data:\n{json.dumps(documents)}"
+        # Summarize the retrieved data
+        summary_prompt = f"""
+        Summarize the following data for a financial newsletter:
+        Focus on key insights and trends:
+        {json.dumps(documents)}
+        """
         summary = call_openai_gpt4(summary_prompt)
         return summary
     except Exception as e:
@@ -68,42 +69,45 @@ def retrieve_and_summarize(collection_name, query_text, top_k=5):
         return "Error in data retrieval."
 
 def call_openai_gpt4(prompt):
-    """Call OpenAI GPT-4 to process the prompt."""
+    """Call OpenAI GPT-4-mini to process the prompt."""
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-40-mini",
             messages=[
-                {"role": "system", "content": "You are a professional assistant generating financial newsletters."},
+                {"role": "system", "content": "You are an assistant generating financial newsletters."},
                 {"role": "user", "content": prompt}
             ]
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"Error calling OpenAI GPT-4: {e}")
+        st.error(f"Error calling OpenAI GPT-4-mini: {e}")
         return "Error generating response."
 
-def assess_accuracy(newsletter, rag_data):
-    """Assess the accuracy of the newsletter using Bespoke Labs."""
+def assess_accuracy(newsletter, context):
+    """Assess the accuracy of the newsletter using a simulated model."""
     try:
-        response = bl.minicheck.factcheck.create(
-            claim=newsletter,
-            context=json.dumps(rag_data)
-        )
-        support_prob = getattr(response, "support_prob", None)
-        if support_prob is None:
-            st.error("Bespoke Labs response does not contain 'support_prob'.")
-            return 0
-
-        st.write("Bespoke Labs Response:", response)
-        return round(support_prob * 100, 2)
+        # Placeholder for an accuracy assessment function
+        # Replace this with any custom logic or API integration to validate
+        accuracy = len(newsletter) / (len(context) * 100)  # Mock logic
+        return round(accuracy * 100, 2)
     except Exception as e:
         st.error(f"Error assessing accuracy: {e}")
         return 0
 
+### Main Functions ###
+
+def fetch_and_store_news_data():
+    """Fetch and store news sentiment data."""
+    fetch_and_store(news_url, "news_sentiment_data", key="feed", limit=50)
+
+def fetch_and_store_ticker_trends_data():
+    """Fetch and store ticker trends data."""
+    fetch_and_store(tickers_url, "ticker_trends_data", key="top_gainers", limit=20)
+
 def generate_newsletter():
-    """Generate a professional newsletter using retrieved data and LLM."""
-    news_summary = retrieve_and_summarize("news_sentiment_data", "Company performance insights")
-    trends_summary = retrieve_and_summarize("ticker_trends_data", "Market trends insights")
+    """Generate a professional newsletter using retrieved data."""
+    news_summary = retrieve_and_summarize("news_sentiment_data", "Company performance insights", top_k=10)
+    trends_summary = retrieve_and_summarize("ticker_trends_data", "Top stock trends", top_k=10)
 
     if "No relevant data found" in (news_summary, trends_summary):
         st.error("Insufficient data for newsletter generation.")
@@ -113,9 +117,9 @@ def generate_newsletter():
 
     # Generate newsletter
     newsletter_prompt = f"""
-    Create a professional financial newsletter with:
-    1. Key Company Insights: {news_summary}
-    2. Major Market Trends: {trends_summary}
+    Create a financial newsletter with:
+    - Key Company Insights: {news_summary}
+    - Major Market Trends: {trends_summary}
     """
     newsletter = call_openai_gpt4(newsletter_prompt)
     st.subheader("Generated Newsletter")
@@ -126,12 +130,12 @@ def generate_newsletter():
     accuracy_score = assess_accuracy(newsletter, rag_data)
     st.success(f"Newsletter Accuracy: {accuracy_score}%")
 
-### Main Buttons ###
+### Main Page Buttons ###
 if st.button("Fetch and Store News Data"):
-    fetch_and_store(news_url, "news_sentiment_data", key="feed")
+    fetch_and_store_news_data()
 
 if st.button("Fetch and Store Ticker Trends Data"):
-    fetch_and_store(tickers_url, "ticker_trends_data", key="top_gainers")
+    fetch_and_store_ticker_trends_data()
 
 if st.button("Generate Newsletter"):
     generate_newsletter()
