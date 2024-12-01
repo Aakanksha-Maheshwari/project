@@ -9,42 +9,36 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 
+import streamlit as st
+import requests
+import json
+import openai
+from bespokelabs import BespokeLabs, DefaultHttpxClient
+import httpx
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+import chromadb
+
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
 
 # Access keys from secrets.toml
 alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
+bespoke_key = st.secrets["bespoke_labs"]["api_key"]
+
+# Initialize Bespoke Labs
+bl = BespokeLabs(auth_token=bespoke_key)
 
 # API URLs for Alpha Vantage
-news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}'
+news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&limit=50'
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Enhanced RAG System with GPT-4-Mini")
+st.title("Alpha Vantage Financial Newsletter with RAG and GPT-4")
 
 ### Helper Functions ###
-
-def fetch_and_store(api_url, collection_name, key="feed", limit=50):
-    """Fetch data from API, filter, and store it in ChromaDB."""
-    try:
-        response = requests.get(f"{api_url}&limit={limit}")
-        response.raise_for_status()
-        data = response.json()
-
-        if key in data and data[key]:
-            collection = client.get_or_create_collection(collection_name)
-            for i, item in enumerate(data[key], start=1):
-                collection.add(
-                    ids=[str(i)],
-                    documents=[json.dumps(item)],
-                    metadatas=[{"source": item.get("source", "Unknown")}]
-                )
-            st.success(f"Stored {len(data[key])} documents in {collection_name}.")
-        else:
-            st.warning(f"No '{key}' key or empty response from API for {collection_name}.")
-    except Exception as e:
-        st.error(f"Error in fetching or storing data for {collection_name}: {e}")
 
 def retrieve_and_summarize(collection_name, query_text, top_k=10):
     """Retrieve data from ChromaDB and summarize."""
@@ -69,77 +63,100 @@ def retrieve_and_summarize(collection_name, query_text, top_k=10):
         return "Error in data retrieval.", []
 
 def call_openai_gpt4(prompt):
-    """Call OpenAI GPT-4-mini to process the prompt."""
+    """Call OpenAI GPT-4 to process the prompt."""
     try:
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are an assistant generating financial newsletters."},
+                {"role": "system", "content": "You are a financial newsletter generator."},
                 {"role": "user", "content": prompt}
             ]
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"Error calling OpenAI GPT-4-mini: {e}")
+        st.error(f"Error calling OpenAI GPT-4: {e}")
         return "Error generating response."
 
 def assess_accuracy(newsletter, relevant_data):
-    """Assess the accuracy of the newsletter by comparing included insights with relevant data."""
+    """
+    Assess the accuracy of the newsletter by comparing included insights with relevant data.
+    """
     try:
-        included_insights = sum(1 for insight in relevant_data if insight['title'] in newsletter)
-        total_insights = len(relevant_data)
+        # Ensure relevant_data contains dictionaries
+        parsed_data = [json.loads(item) if isinstance(item, str) else item for item in relevant_data]
+        
+        # Count the number of insights included in the newsletter
+        included_insights = sum(
+            1 for insight in parsed_data if insight.get('title') and insight['title'] in newsletter
+        )
+        total_insights = len(parsed_data)
 
         if total_insights == 0:
-            return 0
+            return 0  # Avoid division by zero
 
+        # Calculate accuracy as a percentage
         accuracy = (included_insights / total_insights) * 100
         return round(accuracy, 2)
     except Exception as e:
         st.error(f"Error assessing accuracy: {e}")
         return 0
 
-### Main Functions ###
+def fetch_and_store_data(api_url, collection_name):
+    """Fetch data from API and store in ChromaDB."""
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status()
+        data = response.json()
 
-def fetch_and_store_news_data():
-    """Fetch and store news sentiment data."""
-    fetch_and_store(news_url, "news_sentiment_data", key="feed", limit=50)
+        if not data:
+            st.warning("Empty response from API.")
+            return
 
-def fetch_and_store_ticker_trends_data():
-    """Fetch and store ticker trends data."""
-    fetch_and_store(tickers_url, "ticker_trends_data", key="top_gainers", limit=20)
+        collection = client.get_or_create_collection(collection_name)
+        for i, item in enumerate(data.get("feed", []), start=1):
+            collection.add(
+                ids=[str(i)],
+                documents=[json.dumps(item)],
+                metadatas=[{"source": item.get("source", "N/A")}]
+            )
+        st.success(f"Data from {collection_name} updated successfully.")
+    except Exception as e:
+        st.error(f"Error fetching data for {collection_name}: {e}")
+
+### Newsletter Generation ###
 
 def generate_newsletter():
-    """Generate a professional newsletter using retrieved data."""
-    news_summary, news_data = retrieve_and_summarize("news_sentiment_data", "Company performance insights", top_k=10)
-    trends_summary, trends_data = retrieve_and_summarize("ticker_trends_data", "Top stock trends", top_k=10)
+    """Generate the financial newsletter."""
+    news_summary, news_data = retrieve_and_summarize("news_sentiment_data", "Company performance insights", top_k=50)
+    trends_summary, trends_data = retrieve_and_summarize("ticker_trends_data", "Market trends insights", top_k=20)
 
-    if "No relevant data found" in (news_summary, trends_summary):
-        st.error("Insufficient data for newsletter generation.")
+    if not news_data and not trends_data:
+        st.error("No relevant data available for newsletter generation.")
         st.subheader("Fallback Newsletter")
-        st.markdown("No relevant financial data available. Please check back later.")
+        st.markdown("No relevant financial data available. Please check back later for updates.")
         return
 
-    # Generate newsletter
     newsletter_prompt = f"""
-    Create a financial newsletter with:
-    - Key Company Insights: {news_summary}
-    - Major Market Trends: {trends_summary}
+    Generate a professional financial newsletter:
+    Key Company Insights: {news_summary}
+    Major Market Trends: {trends_summary}
     """
     newsletter = call_openai_gpt4(newsletter_prompt)
+
     st.subheader("Generated Newsletter")
     st.markdown(newsletter)
 
-    # Assess accuracy
     combined_data = news_data + trends_data
-    accuracy_score = assess_accuracy(newsletter, combined_data)
-    st.success(f"Newsletter Accuracy: {accuracy_score}%")
+    accuracy = assess_accuracy(newsletter, combined_data)
+    st.success(f"Newsletter Accuracy: {accuracy}%")
 
-### Main Page Buttons ###
+### Main Buttons ###
+
 if st.button("Fetch and Store News Data"):
-    fetch_and_store_news_data()
+    fetch_and_store_data(news_url, "news_sentiment_data")
 
-if st.button("Fetch and Store Ticker Trends Data"):
-    fetch_and_store_ticker_trends_data()
+if st.button("Fetch and Store Trends Data"):
+    fetch_and_store_data(tickers_url, "ticker_trends_data")
 
 if st.button("Generate Newsletter"):
     generate_newsletter()
