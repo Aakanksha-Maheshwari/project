@@ -153,22 +153,45 @@ def summarize_risks(company_data, market_data):
         return "Risk analysis failed."
 
 
-def assess_accuracy_with_bespoke(newsletter, context_data):
-    """Assess newsletter accuracy using Bespoke Labs."""
+def assess_accuracy_with_bespoke(newsletter, company_data, market_data):
+    """
+    Assess the accuracy of the newsletter using Bespoke Labs.
+    Filters and summarizes the company and market data for relevance.
+    """
     try:
+        # Filter and summarize the context
+        def summarize_context(data, category):
+            summaries = []
+            for record in data:
+                if isinstance(record, dict):
+                    ticker = record.get("ticker", "Unknown")
+                    sentiment = record.get("overall_sentiment_label", "Neutral")
+                    summary = record.get("summary", "No details available.")
+                    summaries.append(f"{ticker}: {sentiment} - {summary}")
+            return f"{category} Data Highlights:\n" + "\n".join(summaries[:5])  # Limit to top 5 highlights
+
+        company_summary = summarize_context(company_data, "Company")
+        market_summary = summarize_context(market_data, "Market")
+
+        # Prepare context for Bespoke Labs
+        context = f"{company_summary}\n\n{market_summary}"
+
+        # Fact-check with Bespoke Labs
         response = bl.minicheck.factcheck.create(
             claim=newsletter,
-            context=json.dumps(context_data)
+            context=context
         )
         support_prob = getattr(response, "support_prob", None)
         if support_prob is None:
-            st.error("No support probability found in the Bespoke Labs response.")
+            st.error("No support probability found in Bespoke Labs response.")
             return 0
-        st.write("Bespoke Labs Accuracy Assessment:", response)
+
+        st.write("Bespoke Labs Response:", response)
         return round(support_prob * 100, 2)
     except Exception as e:
         st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
+
 
 
 ### Agents ###
@@ -232,10 +255,9 @@ if st.button("Generate Financial Newsletter"):
         """)
         st.markdown(newsletter)
 
-        # Accuracy Assessment with Bespoke Labs
+                # Assess accuracy using Bespoke Labs
         st.subheader("Accuracy Assessment")
-        combined_data = company_data + market_data
-        accuracy = assess_accuracy_with_bespoke(newsletter, combined_data)
+        accuracy = assess_accuracy_with_bespoke(newsletter, company_data, market_data)
         st.success(f"Newsletter Accuracy: {accuracy}%")
     except Exception as e:
         st.error(f"Error during processing: {e}")
