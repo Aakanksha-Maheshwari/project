@@ -42,18 +42,16 @@ def retrieve_from_chromadb(collection_name, query, top_k=10):
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
-def filter_by_relevance_and_sentiment(data, min_relevance=0.5, min_sentiment=0.1):
-    """Filter data by relevance and sentiment score thresholds."""
+def filter_by_relevance(data, min_relevance=0.5):
+    """Filter data by relevance score threshold."""
     filtered_data = []
     for item in data:
         if isinstance(item, dict):  # Ensure item is a dictionary
             topics = item.get("topics", [])
-            overall_sentiment = item.get("overall_sentiment_score", 0)
-            if any(
-                topic.get("relevance_score", 0) >= min_relevance for topic in topics
-            ) and overall_sentiment >= min_sentiment:
+            if any(topic.get("relevance_score", 0) >= min_relevance for topic in topics):
                 filtered_data.append(item)
     return filtered_data
+
 
 def validate_rag_data(rag_data, source):
     """Validate and filter RAG data for relevance."""
