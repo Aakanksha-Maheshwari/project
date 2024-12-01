@@ -25,18 +25,15 @@ news_url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={a
 tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={alpha_vantage_key}'
 
 # Streamlit App Title
-st.title("Improved RAG System with Alpha Vantage, OpenAI, and Bespoke Labs")
+st.title("Enhanced RAG System for Financial Insights")
 
 ### Helper Functions ###
-
-def fetch_and_store_data(api_url, collection_name, key="feed"):
+def fetch_and_store(api_url, collection_name, key="feed"):
     """Fetch data from API and store it in ChromaDB."""
     try:
         response = requests.get(api_url)
         response.raise_for_status()
         data = response.json()
-        st.write(f"Raw API Response for {collection_name}:", data)  # Debugging
-
         if key in data and data[key]:
             collection = client.get_or_create_collection(collection_name)
             for i, item in enumerate(data[key], start=1):
@@ -45,22 +42,30 @@ def fetch_and_store_data(api_url, collection_name, key="feed"):
                     documents=[json.dumps(item)],
                     metadatas=[{"source": item.get("source", "Unknown")}]
                 )
-            st.success(f"Data updated in {collection_name}. Total documents: {collection.count()}")
+            st.success(f"Data stored in {collection_name}. Total documents: {collection.count()}")
         else:
             st.warning(f"No '{key}' key or empty response for {collection_name}.")
     except Exception as e:
-        st.error(f"Error fetching or updating {collection_name}: {e}")
+        st.error(f"Error in {collection_name}: {e}")
 
-def retrieve_data(collection_name, query_text, top_k=10):
-    """Retrieve data from ChromaDB based on a query."""
+def retrieve_and_summarize(collection_name, query_text, top_k=5):
+    """Retrieve data from ChromaDB and summarize it."""
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
-        st.write(f"Raw results from {collection_name}:", results)  # Debugging
-        return [json.loads(doc) if isinstance(doc, str) else doc for doc in results['documents'] if doc]
+        documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"] if doc]
+        st.write(f"Raw results from {collection_name}:", documents)
+
+        if not documents:
+            return "No relevant data found."
+
+        # Summarize documents using GPT-4
+        summary_prompt = f"Summarize the following financial data:\n{json.dumps(documents)}"
+        summary = call_openai_gpt4(summary_prompt)
+        return summary
     except Exception as e:
-        st.error(f"Error retrieving data from {collection_name}: {e}")
-        return []
+        st.error(f"Error retrieving from {collection_name}: {e}")
+        return "Error in data retrieval."
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
@@ -77,7 +82,7 @@ def call_openai_gpt4(prompt):
         st.error(f"Error calling OpenAI GPT-4: {e}")
         return "Error generating response."
 
-def assess_accuracy_with_bespoke(newsletter, rag_data):
+def assess_accuracy(newsletter, rag_data):
     """Assess the accuracy of the newsletter using Bespoke Labs."""
     try:
         response = bl.minicheck.factcheck.create(
@@ -89,48 +94,44 @@ def assess_accuracy_with_bespoke(newsletter, rag_data):
             st.error("Bespoke Labs response does not contain 'support_prob'.")
             return 0
 
-        st.write("Bespoke Labs Response:", response)  # Debugging
+        st.write("Bespoke Labs Response:", response)
         return round(support_prob * 100, 2)
     except Exception as e:
-        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
+        st.error(f"Error assessing accuracy: {e}")
         return 0
 
 def generate_newsletter():
     """Generate a professional newsletter using retrieved data and LLM."""
-    news_data = retrieve_data("news_sentiment_data", "Company performance insights", top_k=10)
-    trends_data = retrieve_data("ticker_trends_data", "Market trends insights", top_k=10)
+    news_summary = retrieve_and_summarize("news_sentiment_data", "Company performance insights")
+    trends_summary = retrieve_and_summarize("ticker_trends_data", "Market trends insights")
 
-    if not news_data and not trends_data:
-        st.error("No relevant data available for newsletter generation.")
+    if "No relevant data found" in (news_summary, trends_summary):
+        st.error("Insufficient data for newsletter generation.")
         st.subheader("Fallback Newsletter")
-        st.markdown("No relevant financial data available. Please check back later for updates.")
+        st.markdown("No relevant financial data available. Please check back later.")
         return
-
-    # Prepare context for LLM
-    summarized_news = call_openai_gpt4(f"Summarize the following news data:\n{json.dumps(news_data)}")
-    summarized_trends = call_openai_gpt4(f"Summarize the following market trends:\n{json.dumps(trends_data)}")
 
     # Generate newsletter
     newsletter_prompt = f"""
-    Generate a professional financial newsletter with:
-    1. Key Company Insights: {summarized_news}
-    2. Major Market Trends: {summarized_trends}
+    Create a professional financial newsletter with:
+    1. Key Company Insights: {news_summary}
+    2. Major Market Trends: {trends_summary}
     """
     newsletter = call_openai_gpt4(newsletter_prompt)
     st.subheader("Generated Newsletter")
     st.markdown(newsletter)
 
     # Assess accuracy
-    combined_data = news_data + trends_data
-    accuracy_score = assess_accuracy_with_bespoke(newsletter, combined_data)
+    rag_data = [news_summary, trends_summary]
+    accuracy_score = assess_accuracy(newsletter, rag_data)
     st.success(f"Newsletter Accuracy: {accuracy_score}%")
 
-### Main Page Buttons ###
+### Main Buttons ###
 if st.button("Fetch and Store News Data"):
-    fetch_and_store_data(news_url, "news_sentiment_data", key="feed")
+    fetch_and_store(news_url, "news_sentiment_data", key="feed")
 
 if st.button("Fetch and Store Ticker Trends Data"):
-    fetch_and_store_data(tickers_url, "ticker_trends_data", key="top_gainers")
+    fetch_and_store(tickers_url, "ticker_trends_data", key="top_gainers")
 
-if st.button("Generate Newsletter and Measure Accuracy"):
+if st.button("Generate Newsletter"):
     generate_newsletter()
