@@ -37,25 +37,37 @@ def fetch_data(api_url):
     except Exception as e:
         st.error(f"Error fetching data: {e}")
         return None
-
 def store_data_in_chromadb(data, collection_name):
     """Store data in ChromaDB."""
-    if not data or "feed" not in data:
+    if not data:
         st.warning(f"No valid data for {collection_name}")
         return
 
     collection = client.get_or_create_collection(collection_name)
-    st.write(f"Storing data into {collection_name}...")  # Debug log
-    for i, item in enumerate(data["feed"], start=1):
+    if "feed" in data:  # For company data
+        records = data["feed"]
+    elif "top_gainers" in data or "top_losers" in data or "most_actively_traded" in data:  # For market data
+        records = (
+            data.get("top_gainers", []) +
+            data.get("top_losers", []) +
+            data.get("most_actively_traded", [])
+        )
+    else:
+        st.warning(f"No valid structure found for {collection_name}")
+        return
+
+    # Store records in ChromaDB
+    for i, record in enumerate(records, start=1):
         try:
             collection.add(
                 ids=[str(i)],
-                documents=[json.dumps(item)],
-                metadatas=[{"source": item.get("source", "N/A")}],
+                documents=[json.dumps(record)],
+                metadatas=[{"source": record.get("source", "N/A")}],
             )
         except Exception as e:
             st.error(f"Error storing data in {collection_name}: {e}")
-    st.success(f"Data stored in {collection_name}: {collection.count()} records.")
+    st.success(f"Data stored in {collection_name}: {len(records)} records.")
+
 
 
 def retrieve_data(collection_name, query_text, top_k=5):
@@ -63,15 +75,14 @@ def retrieve_data(collection_name, query_text, top_k=5):
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
-        documents = [
+        return [
             json.loads(doc) if isinstance(doc, str) else doc
             for doc in results["documents"]
         ]
-        st.write(f"Retrieved Data from {collection_name}: {documents}")  # Debug log
-        return documents
     except Exception as e:
         st.error(f"Error retrieving data: {e}")
         return []
+
 
 
 def call_openai(prompt):
@@ -120,9 +131,12 @@ class MarketTrendsAnalystAgent:
         if data:
             store_data_in_chromadb(data, "market_data")
             retrieved_data = retrieve_data("market_data", "Market trends insights")
-            st.write(f"Market Data Retrieved: {retrieved_data}")  # Display in UI
+            st.write("Market Data Retrieved:")
+            for entry in retrieved_data:
+                st.write(entry)  # Display each record
             return retrieved_data
         return []
+
 
 class RiskManagementAgent:
     """Analyze risks based on company and market data."""
