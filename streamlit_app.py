@@ -31,11 +31,12 @@ def fetch_data(api_url):
     try:
         response = requests.get(api_url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        st.write(f"Fetched Data from {api_url}: {data}")  # Add debug log
+        return data
     except Exception as e:
         st.error(f"Error fetching data: {e}")
         return None
-
 
 def store_data_in_chromadb(data, collection_name):
     """Store data in ChromaDB."""
@@ -44,6 +45,7 @@ def store_data_in_chromadb(data, collection_name):
         return
 
     collection = client.get_or_create_collection(collection_name)
+    st.write(f"Storing data into {collection_name}...")  # Debug log
     for i, item in enumerate(data["feed"], start=1):
         try:
             collection.add(
@@ -53,6 +55,7 @@ def store_data_in_chromadb(data, collection_name):
             )
         except Exception as e:
             st.error(f"Error storing data in {collection_name}: {e}")
+    st.success(f"Data stored in {collection_name}: {collection.count()} records.")
 
 
 def retrieve_data(collection_name, query_text, top_k=5):
@@ -60,7 +63,12 @@ def retrieve_data(collection_name, query_text, top_k=5):
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
-        return [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"]]
+        documents = [
+            json.loads(doc) if isinstance(doc, str) else doc
+            for doc in results["documents"]
+        ]
+        st.write(f"Retrieved Data from {collection_name}: {documents}")  # Debug log
+        return documents
     except Exception as e:
         st.error(f"Error retrieving data: {e}")
         return []
@@ -99,7 +107,9 @@ class CompanyAnalystAgent:
         data = fetch_data(news_url)
         if data:
             store_data_in_chromadb(data, "company_data")
-            return retrieve_data("company_data", "Company performance insights")
+            retrieved_data = retrieve_data("company_data", "Company performance insights")
+            st.write(f"Company Data Retrieved: {retrieved_data}")  # Display in UI
+            return retrieved_data
         return []
 
 
@@ -109,9 +119,10 @@ class MarketTrendsAnalystAgent:
         data = fetch_data(tickers_url)
         if data:
             store_data_in_chromadb(data, "market_data")
-            return retrieve_data("market_data", "Market trends insights")
+            retrieved_data = retrieve_data("market_data", "Market trends insights")
+            st.write(f"Market Data Retrieved: {retrieved_data}")  # Display in UI
+            return retrieved_data
         return []
-
 
 class RiskManagementAgent:
     """Analyze risks based on company and market data."""
