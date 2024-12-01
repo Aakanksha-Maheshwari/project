@@ -9,17 +9,6 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 
-import streamlit as st
-import requests
-import json
-import openai
-from bespokelabs import BespokeLabs, DefaultHttpxClient
-import httpx
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-import chromadb
-
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
 
@@ -77,28 +66,24 @@ def call_openai_gpt4(prompt):
         st.error(f"Error calling OpenAI GPT-4: {e}")
         return "Error generating response."
 
-def assess_accuracy(newsletter, relevant_data):
+def assess_accuracy_with_bespoke(newsletter, relevant_data):
     """
-    Assess the accuracy of the newsletter by comparing included insights with relevant data.
+    Use Bespoke Labs to assess the accuracy of the newsletter.
     """
     try:
-        # Ensure relevant_data contains dictionaries
-        parsed_data = [json.loads(item) if isinstance(item, str) else item for item in relevant_data]
-        
-        # Count the number of insights included in the newsletter
-        included_insights = sum(
-            1 for insight in parsed_data if insight.get('title') and insight['title'] in newsletter
+        response = bl.minicheck.factcheck.create(
+            claim=newsletter,
+            context=json.dumps(relevant_data)
         )
-        total_insights = len(parsed_data)
+        support_prob = getattr(response, "support_prob", None)
+        if support_prob is None:
+            st.error("Bespoke Labs response does not contain 'support_prob'.")
+            return 0
 
-        if total_insights == 0:
-            return 0  # Avoid division by zero
-
-        # Calculate accuracy as a percentage
-        accuracy = (included_insights / total_insights) * 100
-        return round(accuracy, 2)
+        st.write("Bespoke Labs Response:", response)
+        return round(support_prob * 100, 2)
     except Exception as e:
-        st.error(f"Error assessing accuracy: {e}")
+        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
 
 def fetch_and_store_data(api_url, collection_name):
@@ -147,7 +132,7 @@ def generate_newsletter():
     st.markdown(newsletter)
 
     combined_data = news_data + trends_data
-    accuracy = assess_accuracy(newsletter, combined_data)
+    accuracy = assess_accuracy_with_bespoke(newsletter, combined_data)
     st.success(f"Newsletter Accuracy: {accuracy}%")
 
 ### Main Buttons ###
