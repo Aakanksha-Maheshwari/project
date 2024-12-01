@@ -61,10 +61,26 @@ def store_data_in_chromadb(data, collection_name):
             st.error(f"Error storing data: {e}")
 
 def retrieve_data(collection_name, query_text, top_k=5):
-    """Retrieve data from ChromaDB."""
-    collection = client.get_or_create_collection(collection_name)
-    results = collection.query(query_texts=[query_text], n_results=top_k)
-    return [json.loads(doc) for doc in results["documents"]]
+    """Retrieve data from ChromaDB using similarity search."""
+    try:
+        collection = client.get_or_create_collection(collection_name)
+        results = collection.query(query_texts=[query_text], n_results=top_k)
+
+        # Ensure each document is JSON-deserialized
+        documents = []
+        for doc in results["documents"]:
+            if isinstance(doc, str):
+                documents.append(json.loads(doc))  # Deserialize JSON string
+            elif isinstance(doc, dict):
+                documents.append(doc)  # Already a dictionary
+            else:
+                st.warning(f"Skipping unexpected document format: {type(doc)}")
+        
+        return documents
+    except Exception as e:
+        st.error(f"Error retrieving data from ChromaDB for {collection_name}: {e}")
+        return []
+
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4."""
