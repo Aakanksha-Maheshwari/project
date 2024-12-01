@@ -10,6 +10,17 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import os
+import streamlit as st
+import requests
+import json
+import openai
+from bespokelabs import BespokeLabs
+import chromadb
+import sys
+
+# Fix for SQLite import
+__import__('pysqlite3')
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 # Initialize Clients and Keys
 client = chromadb.PersistentClient()
@@ -71,7 +82,6 @@ def store_data_in_chromadb(data, collection_name, record_keys):
     st.success(f"Stored {len(records)} records in {collection_name}.")
 
 
-
 def retrieve_data(collection_name, query_text, top_k=5):
     """Retrieve data from ChromaDB."""
     try:
@@ -88,7 +98,7 @@ def call_openai(prompt):
     """Call OpenAI for text generation."""
     try:
         response = openai.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a financial assistant."},
                 {"role": "user", "content": prompt}
@@ -100,20 +110,67 @@ def call_openai(prompt):
         return "Error generating response."
 
 
-def assess_accuracy(newsletter, data):
+def summarize_highlights(data, category):
+    """
+    Summarize highlights for company or market data using OpenAI GPT.
+    """
+    if not data:
+        return f"No {category} data available."
+
+    # Extract key fields for summarization
+    extracted_data = []
+    for record in data:
+        name = record.get("ticker", record.get("name", "Unknown"))
+        sentiment = record.get("overall_sentiment_score", "Neutral")
+        price = record.get("price", "N/A")
+        details = record.get("summary", "No details available.")
+        extracted_data.append(f"{name}: Sentiment - {sentiment}, Price - {price}. {details}")
+
+    # Use GPT to summarize highlights
+    try:
+        prompt = f"Summarize the following {category} data highlights:\n" + "\n".join(extracted_data)
+        summary = call_openai(prompt)
+        return summary
+    except Exception as e:
+        st.error(f"Error summarizing {category} highlights: {e}")
+        return f"Could not summarize {category} highlights."
+
+
+def summarize_risks(company_data, market_data):
+    """
+    Analyze risks and generate a summary using OpenAI GPT.
+    """
+    if not company_data and not market_data:
+        return "No risk data available."
+
+    try:
+        prompt = f"""
+        Analyze the following data for risks and summarize:
+        - Company Data: {json.dumps(company_data[:5], indent=2)} 
+        - Market Data: {json.dumps(market_data[:5], indent=2)}
+        """
+        risk_summary = call_openai(prompt)
+        return risk_summary
+    except Exception as e:
+        st.error(f"Error summarizing risks: {e}")
+        return "Risk analysis failed."
+
+
+def assess_accuracy_with_bespoke(newsletter, context_data):
     """Assess newsletter accuracy using Bespoke Labs."""
     try:
         response = bl.minicheck.factcheck.create(
             claim=newsletter,
-            context=json.dumps(data)
+            context=json.dumps(context_data)
         )
         support_prob = getattr(response, "support_prob", None)
         if support_prob is None:
-            st.error("No support probability found in the response.")
+            st.error("No support probability found in the Bespoke Labs response.")
             return 0
+        st.write("Bespoke Labs Accuracy Assessment:", response)
         return round(support_prob * 100, 2)
     except Exception as e:
-        st.error(f"Error assessing accuracy: {e}")
+        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0
 
 
@@ -138,27 +195,6 @@ class MarketTrendsAnalystAgent:
         return []
 
 
-class RiskManagementAgent:
-    """Analyze risks based on company and market data."""
-    def process(self, company_data, market_data):
-        if not company_data and not market_data:
-            return "No risk data available."
-        prompt = f"Analyze the following data for risks:\n\nCompany Data: {json.dumps(company_data)}\n\nMarket Data: {json.dumps(market_data)}"
-        return call_openai(prompt)
-
-
-class NewsletterAgent:
-    """Generate the financial newsletter."""
-    def process(self, company_summary, market_summary, risk_summary):
-        prompt = f"""
-        Generate a financial newsletter with:
-        - Company Insights: {company_summary}
-        - Market Trends: {market_summary}
-        - Risk Analysis: {risk_summary}
-        """
-        return call_openai(prompt)
-
-
 ### Main Logic ###
 if st.button("Generate Financial Newsletter"):
     try:
@@ -168,32 +204,41 @@ if st.button("Generate Financial Newsletter"):
         company_data = company_agent.process()
         st.write(f"Retrieved {len(company_data)} company records.")
 
+        # Summarize Company Highlights
+        st.subheader("Company Highlights")
+        company_summary = summarize_highlights(company_data, "Company")
+        st.markdown(company_summary)
+
         # Market Trends Analyst Agent
         st.subheader("Market Trends Analyst Agent")
         market_agent = MarketTrendsAnalystAgent()
         market_data = market_agent.process()
         st.write(f"Retrieved {len(market_data)} market records.")
 
-        # Risk Management Agent
-        st.subheader("Risk Management Agent")
-        risk_agent = RiskManagementAgent()
-        risk_summary = risk_agent.process(company_data, market_data)
-        st.write(f"Risk Summary: {risk_summary}")
+        # Summarize Market Highlights
+        st.subheader("Market Highlights")
+        market_summary = summarize_highlights(market_data, "Market")
+        st.markdown(market_summary)
 
-        # Newsletter Agent
-        st.subheader("Newsletter Agent")
-        newsletter_agent = NewsletterAgent()
-        newsletter = newsletter_agent.process(
-            company_summary=json.dumps(company_data, indent=2),
-            market_summary=json.dumps(market_data, indent=2),
-            risk_summary=risk_summary
-        )
+        # Risk Management
+        st.subheader("Risk Management Summary")
+        risk_summary = summarize_risks(company_data, market_data)
+        st.write(risk_summary)
+
+        # Generate Newsletter
+        st.subheader("Generated Financial Newsletter")
+        newsletter = call_openai(f"""
+        Generate a professional financial newsletter with:
+        - Company Insights: {company_summary}
+        - Market Trends: {market_summary}
+        - Risk Analysis: {risk_summary}
+        """)
         st.markdown(newsletter)
 
-        # Accuracy Assessment
+        # Accuracy Assessment with Bespoke Labs
         st.subheader("Accuracy Assessment")
-        accuracy = assess_accuracy(newsletter, company_data + market_data)
+        combined_data = company_data + market_data
+        accuracy = assess_accuracy_with_bespoke(newsletter, combined_data)
         st.success(f"Newsletter Accuracy: {accuracy}%")
-
     except Exception as e:
         st.error(f"Error during processing: {e}")
