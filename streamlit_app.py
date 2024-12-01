@@ -18,14 +18,8 @@ openai.api_key = st.secrets["openai"]["api_key"]
 bespoke_key = st.secrets["bespoke_labs"]["api_key"]
 
 # Initialize Bespoke Labs with DefaultHttpxClient
-custom_http_client = DefaultHttpxClient(
-    proxies="http://my.test.proxy.example.com",  # Replace with your actual proxy URL
-    transport=httpx.HTTPTransport(local_address="0.0.0.0")  # Optional customization
-)
-
 bl = BespokeLabs(
-    auth_token=bespoke_key,
-    http_client=custom_http_client
+    auth_token=bespoke_key
 )
 
 # API URLs for Alpha Vantage
