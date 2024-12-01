@@ -11,7 +11,6 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import os
 
-
 # Initialize Clients and Keys
 client = chromadb.PersistentClient()
 openai.api_key = st.secrets["openai"]["api_key"]
@@ -26,7 +25,6 @@ tickers_url = f"https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 # App Title
 st.title("Multi-Agent Financial Newsletter Application")
 
-
 ### Helper Functions ###
 def fetch_data(api_url):
     """Fetch data from an API."""
@@ -34,31 +32,42 @@ def fetch_data(api_url):
         response = requests.get(api_url)
         response.raise_for_status()
         data = response.json()
-        st.write(f"Fetched Data: {api_url}")  # Debugging log
+        st.write(f"Fetched Data from: {api_url}")
         return data
-    except Exception as e:
-        st.error(f"Error fetching data from {api_url}: {e}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"API request error: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        st.error(f"Error parsing API response: {e}")
         return None
 
 
-def store_data_in_chromadb(data, collection_name):
-    """Store data in ChromaDB."""
+def store_data_in_chromadb(data, collection_name, record_keys):
+    """Store structured data in ChromaDB."""
     if not data:
-        st.warning(f"No data available for {collection_name}.")
+        st.warning(f"No valid data for {collection_name}.")
+        return
+
+    records = []
+    for key in record_keys:
+        if key in data:
+            records.extend(data[key])
+
+    if not records:
+        st.warning(f"No records found in the data for keys: {record_keys}")
         return
 
     collection = client.get_or_create_collection(collection_name)
-    records = data.get("feed", []) + data.get("top_gainers", []) + data.get("top_losers", []) + data.get("most_actively_traded", [])
-    
     for i, record in enumerate(records, start=1):
         try:
             collection.add(
                 ids=[str(i)],
                 documents=[json.dumps(record)],
-                metadatas=[{"source": record.get("source", "N/A")}],
+                metadatas=[{"source": record.get("source", "N/A")}]
             )
         except Exception as e:
-            st.error(f"Error storing data in {collection_name}: {e}")
+            st.error(f"Error storing record in {collection_name}: {e}")
+
     st.success(f"Stored {len(records)} records in {collection_name}.")
 
 
@@ -77,11 +86,11 @@ def call_openai(prompt):
     """Call OpenAI for text generation."""
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a financial assistant."},
-                {"role": "user", "content": prompt},
-            ],
+                {"role": "user", "content": prompt}
+            ]
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -92,8 +101,15 @@ def call_openai(prompt):
 def assess_accuracy(newsletter, data):
     """Assess newsletter accuracy using Bespoke Labs."""
     try:
-        response = bl.minicheck.factcheck.create(claim=newsletter, context=json.dumps(data))
-        return round(response.support_prob * 100, 2) if hasattr(response, "support_prob") else 0
+        response = bl.minicheck.factcheck.create(
+            claim=newsletter,
+            context=json.dumps(data)
+        )
+        support_prob = getattr(response, "support_prob", None)
+        if support_prob is None:
+            st.error("No support probability found in the response.")
+            return 0
+        return round(support_prob * 100, 2)
     except Exception as e:
         st.error(f"Error assessing accuracy: {e}")
         return 0
@@ -105,7 +121,7 @@ class CompanyAnalystAgent:
     def process(self):
         data = fetch_data(news_url)
         if data:
-            store_data_in_chromadb(data, "company_data")
+            store_data_in_chromadb(data, "company_data", ["feed"])
             return retrieve_data("company_data", "Company performance insights")
         return []
 
@@ -115,7 +131,7 @@ class MarketTrendsAnalystAgent:
     def process(self):
         data = fetch_data(tickers_url)
         if data:
-            store_data_in_chromadb(data, "market_data")
+            store_data_in_chromadb(data, "market_data", ["top_gainers", "top_losers", "most_actively_traded"])
             return retrieve_data("market_data", "Market trends insights")
         return []
 
@@ -125,7 +141,7 @@ class RiskManagementAgent:
     def process(self, company_data, market_data):
         if not company_data and not market_data:
             return "No risk data available."
-        prompt = f"Analyze the following data for risks:\nCompany Data: {json.dumps(company_data)}\nMarket Data: {json.dumps(market_data)}"
+        prompt = f"Analyze the following data for risks:\n\nCompany Data: {json.dumps(company_data)}\n\nMarket Data: {json.dumps(market_data)}"
         return call_openai(prompt)
 
 
@@ -133,7 +149,7 @@ class NewsletterAgent:
     """Generate the financial newsletter."""
     def process(self, company_summary, market_summary, risk_summary):
         prompt = f"""
-        Create a financial newsletter:
+        Generate a financial newsletter with:
         - Company Insights: {company_summary}
         - Market Trends: {market_summary}
         - Risk Analysis: {risk_summary}
@@ -144,28 +160,38 @@ class NewsletterAgent:
 ### Main Logic ###
 if st.button("Generate Financial Newsletter"):
     try:
+        # Company Analyst Agent
         st.subheader("Company Analyst Agent")
         company_agent = CompanyAnalystAgent()
         company_data = company_agent.process()
         st.write(f"Retrieved {len(company_data)} company records.")
 
+        # Market Trends Analyst Agent
         st.subheader("Market Trends Analyst Agent")
         market_agent = MarketTrendsAnalystAgent()
         market_data = market_agent.process()
         st.write(f"Retrieved {len(market_data)} market records.")
 
+        # Risk Management Agent
         st.subheader("Risk Management Agent")
         risk_agent = RiskManagementAgent()
         risk_summary = risk_agent.process(company_data, market_data)
         st.write(f"Risk Summary: {risk_summary}")
 
+        # Newsletter Agent
         st.subheader("Newsletter Agent")
         newsletter_agent = NewsletterAgent()
-        newsletter = newsletter_agent.process(company_data, market_data, risk_summary)
+        newsletter = newsletter_agent.process(
+            company_summary=json.dumps(company_data, indent=2),
+            market_summary=json.dumps(market_data, indent=2),
+            risk_summary=risk_summary
+        )
         st.markdown(newsletter)
 
+        # Accuracy Assessment
         st.subheader("Accuracy Assessment")
         accuracy = assess_accuracy(newsletter, company_data + market_data)
         st.success(f"Newsletter Accuracy: {accuracy}%")
+
     except Exception as e:
         st.error(f"Error during processing: {e}")
