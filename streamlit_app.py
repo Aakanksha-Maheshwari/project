@@ -11,6 +11,13 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import os
 
+import streamlit as st
+import requests
+import json
+from bespokelabs import BespokeLabs
+import chromadb
+import openai
+
 # Initialize Clients and Keys
 client = chromadb.PersistentClient()
 openai.api_key = st.secrets["openai"]["api_key"]
@@ -76,7 +83,7 @@ def call_openai(prompt):
                 {"role": "user", "content": prompt},
             ],
         )
-        return response.choices[0].message.content.strip()
+        return response.choices[0].message.content
     except Exception as e:
         st.error(f"Error calling OpenAI: {e}")
         return "Error generating response."
