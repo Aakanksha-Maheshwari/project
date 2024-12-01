@@ -3,13 +3,11 @@ import requests
 import json
 import openai
 from multiprocessing import Process, Manager, Queue
-from bespokelabs import BespokeLabs, DefaultHttpxClient
-import httpx
+from bespokelabs import BespokeLabs
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
-import threading
 
 # Initialize ChromaDB Persistent Client
 client = chromadb.PersistentClient()
@@ -31,15 +29,15 @@ st.title("Multi-Agent Financial Newsletter Generator")
 
 ### Helper Functions ###
 
-def fetch_and_store_data(api_url, collection_name):
-    """Fetch data from API and store in ChromaDB."""
+def fetch_and_store_data(api_url, collection_name, output_queue):
+    """Agent: Fetch and store data in ChromaDB."""
     try:
         response = requests.get(api_url)
         response.raise_for_status()
         data = response.json()
 
         if not data:
-            st.warning(f"No data returned from API for {collection_name}.")
+            output_queue.put((collection_name, None, "No data returned from API."))
             return
 
         collection = client.get_or_create_collection(collection_name)
@@ -49,20 +47,20 @@ def fetch_and_store_data(api_url, collection_name):
                 documents=[json.dumps(item)],
                 metadatas=[{"source": item.get("source", "N/A")}]
             )
-        st.success(f"Data fetched and stored in {collection_name}.")
-        st.write(f"Total documents in {collection_name}: {collection.count()}")
+        output_queue.put((collection_name, "Data fetched and stored successfully.", None))
     except Exception as e:
-        st.error(f"Error fetching data for {collection_name}: {e}")
+        output_queue.put((collection_name, None, f"Error: {str(e)}"))
 
-def retrieve_and_summarize(collection_name, query_text, top_k=10):
-    """Retrieve data from ChromaDB and summarize."""
+def retrieve_and_summarize(collection_name, query_text, top_k, output_queue):
+    """Agent: Retrieve and summarize data from ChromaDB."""
     try:
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
         documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"] if doc]
 
         if not documents:
-            return "No relevant data found.", []
+            output_queue.put((collection_name, "No relevant data found.", None))
+            return
 
         summary_prompt = f"""
         Summarize the following data for a financial newsletter:
@@ -70,10 +68,9 @@ def retrieve_and_summarize(collection_name, query_text, top_k=10):
         {json.dumps(documents)}
         """
         summary = call_openai_gpt4(summary_prompt)
-        return summary, documents
+        output_queue.put((collection_name, summary, documents))
     except Exception as e:
-        st.error(f"Error retrieving data from {collection_name}: {e}")
-        return "Error in data retrieval.", []
+        output_queue.put((collection_name, None, f"Error: {str(e)}"))
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
@@ -87,11 +84,10 @@ def call_openai_gpt4(prompt):
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"Error calling OpenAI GPT-4: {e}")
-        return "Error generating response."
+        return f"Error: {str(e)}"
 
 def assess_accuracy_with_bespoke(newsletter, relevant_data):
-    """Use Bespoke Labs to assess the accuracy of the newsletter."""
+    """Agent: Use Bespoke Labs to assess newsletter accuracy."""
     try:
         response = bl.minicheck.factcheck.create(
             claim=newsletter,
@@ -99,96 +95,124 @@ def assess_accuracy_with_bespoke(newsletter, relevant_data):
         )
         support_prob = getattr(response, "support_prob", None)
         if support_prob is None:
-            st.error("Bespoke Labs response does not contain 'support_prob'.")
-            return 0
+            return 0, "Bespoke Labs response does not contain 'support_prob'."
 
-        st.write("Bespoke Labs Response:", response)
-        return round(support_prob * 100, 2)
+        return round(support_prob * 100, 2), None
     except Exception as e:
-        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
-        return 0
+        return 0, f"Error: {str(e)}"
 
-### Agent Functions ###
+### Multi-Agent Execution ###
 
-def company_analyst_agent():
-    """Fetch and analyze company performance data."""
+def company_analyst_agent(output_queue):
+    """Company Analyst Agent."""
+    fetch_and_store_data(news_url, "news_sentiment_data", output_queue)
+    retrieve_and_summarize("news_sentiment_data", "Company performance insights", 50, output_queue)
+
+def market_trends_agent(output_queue):
+    """Market Trends Analyst Agent."""
+    fetch_and_store_data(tickers_url, "ticker_trends_data", output_queue)
+    retrieve_and_summarize("ticker_trends_data", "Market trends insights", 20, output_queue)
+
+def risk_management_agent(company_data, market_data, output_queue):
+    """Risk Management Agent."""
     try:
-        collection_name = "news_sentiment_data"
-        fetch_and_store_data(news_url, collection_name)
-        summary, data = retrieve_and_summarize(collection_name, "Company performance insights", top_k=50)
-        return summary, data
-    except Exception as e:
-        st.error(f"Error in Company Analyst Agent: {e}")
-        return "No data from Company Analyst Agent.", []
+        if not company_data or not market_data:
+            output_queue.put(("risk_management", "No risk data available.", None))
+            return
 
-def market_trends_analyst_agent():
-    """Fetch and analyze market trends data."""
-    try:
-        collection_name = "ticker_trends_data"
-        fetch_and_store_data(tickers_url, collection_name)
-        summary, data = retrieve_and_summarize(collection_name, "Market trends insights", top_k=20)
-        return summary, data
-    except Exception as e:
-        st.error(f"Error in Market Trends Analyst Agent: {e}")
-        return "No data from Market Trends Analyst Agent.", []
-
-def risk_management_agent(company_data, market_data):
-    """Evaluate risks based on company and market data."""
-    try:
-        if not company_data and not market_data:
-            return "No risk data available."
-
-        risk_analysis_prompt = f"""
+        risk_prompt = f"""
         Analyze the following data for potential risks:
         Company Data: {json.dumps(company_data)}
         Market Data: {json.dumps(market_data)}
         Provide insights on major risks for investors.
         """
-        return call_openai_gpt4(risk_analysis_prompt)
+        risk_summary = call_openai_gpt4(risk_prompt)
+        output_queue.put(("risk_management", risk_summary, None))
     except Exception as e:
-        st.error(f"Error in Risk Management Agent: {e}")
-        return "Error analyzing risks."
+        output_queue.put(("risk_management", None, f"Error: {str(e)}"))
 
-def newsletter_generator_agent(company_summary, market_summary, risk_summary):
-    """Generate the newsletter using agent outputs."""
+def newsletter_agent(company_summary, market_summary, risk_summary, output_queue):
+    """Newsletter Generator Agent."""
     try:
-        newsletter_prompt = f"""
-        Generate a financial newsletter combining the following:
-        - Key Company Insights: {company_summary}
-        - Major Market Trends: {market_summary}
+        prompt = f"""
+        Generate a financial newsletter combining:
+        - Company Insights: {company_summary}
+        - Market Trends: {market_summary}
         - Risk Management Insights: {risk_summary}
         Provide a professional and cohesive newsletter.
         """
-        return call_openai_gpt4(newsletter_prompt)
+        newsletter = call_openai_gpt4(prompt)
+        output_queue.put(("newsletter", newsletter, None))
     except Exception as e:
-        st.error(f"Error in Newsletter Generator Agent: {e}")
-        return "Error generating newsletter."
+        output_queue.put(("newsletter", None, f"Error: {str(e)}"))
 
 ### Main Logic ###
 
 if st.button("Generate Financial Newsletter"):
-    st.subheader("Executing Company Analyst Agent")
-    company_summary, company_data = company_analyst_agent()
-    st.write(f"Company Summary: {company_summary}")
-    st.write(f"Company Data: {len(company_data)} documents")
+    with Manager() as manager:
+        output_queue = manager.Queue()
 
-    st.subheader("Executing Market Trends Analyst Agent")
-    market_summary, market_data = market_trends_analyst_agent()
-    st.write(f"Market Summary: {market_summary}")
-    st.write(f"Market Data: {len(market_data)} documents")
+        # Launch agents as processes
+        company_process = Process(target=company_analyst_agent, args=(output_queue,))
+        market_process = Process(target=market_trends_agent, args=(output_queue,))
+        company_process.start()
+        market_process.start()
+        company_process.join()
+        market_process.join()
 
-    st.subheader("Executing Risk Management Agent")
-    risk_summary = risk_management_agent(company_data, market_data)
-    st.write(f"Risk Summary: {risk_summary}")
+        # Collect outputs
+        company_summary, company_data, market_summary, market_data = None, None, None, None
+        while not output_queue.empty():
+            name, result, error = output_queue.get()
+            if error:
+                st.error(f"{name} Error: {error}")
+            elif name == "news_sentiment_data":
+                company_summary, company_data = result
+            elif name == "ticker_trends_data":
+                market_summary, market_data = result
 
-    st.subheader("Generating Newsletter")
-    newsletter = newsletter_generator_agent(company_summary, market_summary, risk_summary)
-    st.markdown(newsletter)
+        # Risk management agent
+        risk_process = Process(
+            target=risk_management_agent, args=(company_data, market_data, output_queue)
+        )
+        risk_process.start()
+        risk_process.join()
 
-    if newsletter == "Error generating newsletter.":
-        st.error("Newsletter generation failed. Check agent outputs and prompts.")
+        # Collect risk summary
+        risk_summary = None
+        while not output_queue.empty():
+            name, result, error = output_queue.get()
+            if error:
+                st.error(f"{name} Error: {error}")
+            elif name == "risk_management":
+                risk_summary = result
 
-    st.subheader("Assessing Newsletter Accuracy")
-    combined_data = company_data + market_data
-    accuracy = assess_accuracy_with_bespoke(newsletter, combined_data)
-    st.success(f"Newsletter Accuracy: {accuracy}%")
+        # Newsletter generation
+        newsletter_process = Process(
+            target=newsletter_agent,
+            args=(company_summary, market_summary, risk_summary, output_queue),
+        )
+        newsletter_process.start()
+        newsletter_process.join()
+
+        # Collect newsletter
+        newsletter = None
+        while not output_queue.empty():
+            name, result, error = output_queue.get()
+            if error:
+                st.error(f"{name} Error: {error}")
+            elif name == "newsletter":
+                newsletter = result
+
+        # Display newsletter
+        if newsletter:
+            st.subheader("Generated Newsletter")
+            st.markdown(newsletter)
+
+        # Assess accuracy
+        combined_data = (company_data or []) + (market_data or [])
+        accuracy, error = assess_accuracy_with_bespoke(newsletter, combined_data)
+        if error:
+            st.error(f"Accuracy Error: {error}")
+        else:
+            st.success(f"Newsletter Accuracy: {accuracy}%")
