@@ -31,12 +31,13 @@ tickers_url = f'https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&ap
 # Streamlit App Title
 st.title("Multi-Agent Financial Newsletter Generator with ChromaDB")
 
-### Helper Functions ###
 def get_embedding(text, model="text-embedding-ada-002"):
     """Generate an embedding for the given text using OpenAI."""
     try:
         text = text.replace("\n", " ")
         response = client_openai.embeddings.create(input=[text], model=model)
+        # Log the embedding shape
+        st.write(f"Embedding shape: {len(response.data[0].embedding)}")
         return response.data[0].embedding  # Correctly access the embedding attribute
     except Exception as e:
         st.error(f"Error generating embedding: {e}")
@@ -63,19 +64,34 @@ def store_data_in_chromadb(api_url, collection_name):
         return
 
     collection = client.get_or_create_collection(collection_name)
+    expected_dim = 1536  # Dimension size for text-embedding-ada-002
+
     for i, item in enumerate(data["feed"], start=1):
         summary = item.get('summary', '')
         if not summary:
+            st.warning(f"Skipping record {i}: No summary found.")
             continue
+
         embedding = get_embedding(summary, model="text-embedding-ada-002")
-        if embedding:
+        if embedding is None:
+            st.warning(f"Skipping record {i}: Failed to generate embedding.")
+            continue
+
+        # Validate dimensions
+        if len(embedding) != expected_dim:
+            st.error(f"Skipping record {i}: Invalid embedding dimensions ({len(embedding)}).")
+            continue
+
+        try:
             collection.add(
                 ids=[str(i)],
                 embeddings=[embedding],
                 documents=[json.dumps(item)],
                 metadatas=[{"source": item.get("source", "N/A")}]
             )
-    st.success(f"Data successfully stored in ChromaDB for {collection_name}.")
+            st.info(f"Record {i} added successfully.")
+        except Exception as e:
+            st.error(f"Failed to add record {i} to ChromaDB: {e}")
 
 def retrieve_data_from_chromadb(collection_name, query_text, top_k):
     """Retrieve data from ChromaDB using similarity search."""
