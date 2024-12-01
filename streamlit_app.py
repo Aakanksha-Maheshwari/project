@@ -17,7 +17,7 @@ alpha_vantage_key = st.secrets["alpha_vantage"]["api_key"]
 openai.api_key = st.secrets["openai"]["api_key"]
 bespoke_key = st.secrets["bespoke_labs"]["api_key"]
 
-# Initialize Bespoke Labs with DefaultHttpxClient
+# Initialize Bespoke Labs
 bl = BespokeLabs(
     auth_token=bespoke_key
 )
@@ -45,16 +45,16 @@ def retrieve_from_chromadb(collection_name, query, top_k=10):
         return []
 
 def validate_rag_data(rag_data, source):
-    """Validate and filter RAG data for relevance and quality."""
+    """Validate and filter RAG data for relevance."""
     if not rag_data:
         st.warning(f"No data retrieved from {source}.")
         return []
 
-    filtered_data = [item for item in rag_data if "summary" in item]
+    filtered_data = [item for item in rag_data if item]  # Filter non-empty
     if not filtered_data:
         st.warning(f"No relevant data found in {source}.")
     else:
-        st.write(f"Retrieved {len(filtered_data)} relevant items from {source}.")
+        st.write(f"Retrieved {len(filtered_data)} items from {source}.")
     return filtered_data
 
 def call_openai_gpt4(prompt):
@@ -96,8 +96,8 @@ def fetch_and_update_news_data():
         response = requests.get(news_url)
         response.raise_for_status()
         data = response.json()
-        st.write("News API Response:", data)
-        if 'feed' in data:
+        if 'feed' in data and data['feed']:
+            st.write("Fetched News Data Sample:", data['feed'][:3])  # Sample preview
             collection = client.get_or_create_collection("news_sentiment_data")
             for i, item in enumerate(data['feed'], start=1):
                 collection.add(
@@ -107,9 +107,9 @@ def fetch_and_update_news_data():
                 )
             st.success("News data updated in ChromaDB.")
         else:
-            st.error("No news data found in API response.")
+            st.warning("No 'feed' key or empty response from News API.")
     except Exception as e:
-        st.error(f"Error updating news data: {e}")
+        st.error(f"Error fetching or updating news data: {e}")
 
 def fetch_and_update_ticker_trends_data():
     """Fetch ticker trends data from the API and update ChromaDB."""
@@ -117,8 +117,8 @@ def fetch_and_update_ticker_trends_data():
         response = requests.get(tickers_url)
         response.raise_for_status()
         data = response.json()
-        st.write("Ticker Trends API Response:", data)
         if "top_gainers" in data:
+            st.write("Ticker Trends API Response Sample:", data["top_gainers"][:3])  # Sample preview
             collection = client.get_or_create_collection("ticker_trends_data")
             collection.add(
                 ids=[str(i) for i in range(len(data["top_gainers"]))],
@@ -127,7 +127,7 @@ def fetch_and_update_ticker_trends_data():
             )
             st.success("Ticker trends data updated in ChromaDB.")
         else:
-            st.error("Invalid data format received from API.")
+            st.warning("No 'top_gainers' key or empty response from Ticker Trends API.")
     except Exception as e:
         st.error(f"Error updating ticker trends data: {e}")
 
@@ -135,30 +135,23 @@ def fetch_and_update_ticker_trends_data():
 
 def generate_newsletter_with_accuracy():
     """Generate the newsletter using RAG and measure its accuracy."""
-    company_insights = retrieve_from_chromadb("news_sentiment_data", "Detailed insights about company performance", top_k=10)
+    company_insights = retrieve_from_chromadb("news_sentiment_data", "Company performance insights", top_k=10)
     company_insights = validate_rag_data(company_insights, "News Sentiment Data")
 
-    market_trends = retrieve_from_chromadb("ticker_trends_data", "Key market trends and top performers", top_k=10)
+    market_trends = retrieve_from_chromadb("ticker_trends_data", "Market trends insights", top_k=10)
     market_trends = validate_rag_data(market_trends, "Ticker Trends Data")
 
-    if not company_insights or not market_trends:
-        st.error("Insufficient RAG data for newsletter generation.")
+    if not company_insights and not market_trends:
+        st.error("No relevant data available for newsletter generation.")
         return
 
-    summarized_insights = call_openai_gpt4(f"""
-    Summarize the following company insights in detail, focusing on key metrics, growth trends, and highlights:
-    {json.dumps(company_insights, indent=2)}
-    """)
-
-    summarized_trends = call_openai_gpt4(f"""
-    Summarize the following market trends, highlighting significant gainers, losers, and trading volumes:
-    {json.dumps(market_trends, indent=2)}
-    """)
+    summarized_insights = call_openai_gpt4(f"Summarize the following company insights:\n{json.dumps(company_insights)}")
+    summarized_trends = call_openai_gpt4(f"Summarize the following market trends:\n{json.dumps(market_trends)}")
 
     prompt = f"""
-    Create a professional daily newsletter. Include:
-    1. Key Company Insights: {summarized_insights}
-    2. Major Market Trends: {summarized_trends}
+    Generate a professional newsletter with:
+    - Key Company Insights: {summarized_insights}
+    - Major Market Trends: {summarized_trends}
     """
     newsletter = call_openai_gpt4(prompt)
     st.subheader("Generated Newsletter")
