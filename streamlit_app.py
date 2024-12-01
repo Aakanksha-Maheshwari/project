@@ -11,13 +11,6 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 import os
 
-import streamlit as st
-import requests
-import json
-from bespokelabs import BespokeLabs
-import chromadb
-import openai
-
 # Initialize Clients and Keys
 client = chromadb.PersistentClient()
 openai.api_key = st.secrets["openai"]["api_key"]
@@ -83,7 +76,7 @@ def call_openai(prompt):
                 {"role": "user", "content": prompt},
             ],
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"Error calling OpenAI: {e}")
         return "Error generating response."
@@ -104,16 +97,20 @@ class CompanyAnalystAgent:
     """Analyze company performance."""
     def process(self):
         data = fetch_data(news_url)
-        store_data_in_chromadb(data, "company_data")
-        return retrieve_data("company_data", "Company performance insights")
+        if data:
+            store_data_in_chromadb(data, "company_data")
+            return retrieve_data("company_data", "Company performance insights")
+        return []
 
 
 class MarketTrendsAnalystAgent:
     """Analyze market trends."""
     def process(self):
         data = fetch_data(tickers_url)
-        store_data_in_chromadb(data, "market_data")
-        return retrieve_data("market_data", "Market trends insights")
+        if data:
+            store_data_in_chromadb(data, "market_data")
+            return retrieve_data("market_data", "Market trends insights")
+        return []
 
 
 class RiskManagementAgent:
@@ -144,32 +141,36 @@ class NewsletterAgent:
 
 ### Main Logic ###
 if st.button("Generate Financial Newsletter"):
-    # Company Analyst Agent
-    st.subheader("Company Analyst Agent")
-    company_agent = CompanyAnalystAgent()
-    company_data = company_agent.process()
-    st.write(f"Company Data: {len(company_data)} records retrieved.")
+    try:
+        # Company Analyst Agent
+        st.subheader("Company Analyst Agent")
+        company_agent = CompanyAnalystAgent()
+        company_data = company_agent.process()
+        st.write(f"Company Data: {len(company_data)} records retrieved.")
 
-    # Market Trends Analyst Agent
-    st.subheader("Market Trends Analyst Agent")
-    market_agent = MarketTrendsAnalystAgent()
-    market_data = market_agent.process()
-    st.write(f"Market Data: {len(market_data)} records retrieved.")
+        # Market Trends Analyst Agent
+        st.subheader("Market Trends Analyst Agent")
+        market_agent = MarketTrendsAnalystAgent()
+        market_data = market_agent.process()
+        st.write(f"Market Data: {len(market_data)} records retrieved.")
 
-    # Risk Management Agent
-    st.subheader("Risk Management Agent")
-    risk_agent = RiskManagementAgent()
-    risk_summary = risk_agent.process(company_data, market_data)
-    st.write(f"Risk Summary: {risk_summary}")
+        # Risk Management Agent
+        st.subheader("Risk Management Agent")
+        risk_agent = RiskManagementAgent()
+        risk_summary = risk_agent.process(company_data, market_data)
+        st.write(f"Risk Summary: {risk_summary}")
 
-    # Newsletter Agent
-    st.subheader("Newsletter Agent")
-    newsletter_agent = NewsletterAgent()
-    newsletter = newsletter_agent.process(company_data, market_data, risk_summary)
-    st.markdown(newsletter)
+        # Newsletter Agent
+        st.subheader("Newsletter Agent")
+        newsletter_agent = NewsletterAgent()
+        newsletter = newsletter_agent.process(risk_summary, company_data, market_data)
+        st.markdown(newsletter)
 
-    # Accuracy Assessment
-    st.subheader("Assessing Newsletter Accuracy")
-    combined_data = company_data + market_data
-    accuracy = assess_accuracy(newsletter, combined_data)
-    st.success(f"Newsletter Accuracy: {accuracy}%")
+        # Accuracy Assessment
+        st.subheader("Assessing Newsletter Accuracy")
+        combined_data = company_data + market_data
+        accuracy = assess_accuracy(newsletter, combined_data)
+        st.success(f"Newsletter Accuracy: {accuracy}%")
+
+    except Exception as e:
+        st.error(f"Error in main application logic: {e}")
