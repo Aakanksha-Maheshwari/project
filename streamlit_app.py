@@ -39,20 +39,23 @@ def retrieve_from_chromadb(collection_name, query, top_k=10):
             query_texts=[query],
             n_results=top_k
         )
-        return [doc for doc in results['documents'] if doc]  # Filter out empty results
+        return [json.loads(doc) if isinstance(doc, str) else doc for doc in results['documents'] if doc]
     except Exception as e:
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
 def filter_by_relevance_and_sentiment(data, min_relevance=0.7, min_sentiment=0.2):
     """Filter data by relevance and sentiment score thresholds."""
-    filtered_data = [
-        item for item in data
-        if all(
-            topic.get("relevance_score", 0) >= min_relevance for topic in item.get("topics", [])
-        ) and item.get("overall_sentiment_score", 0) >= min_sentiment
-    ]
+    filtered_data = []
+    for item in data:
+        if isinstance(item, dict):  # Ensure item is a dictionary
+            topics = item.get("topics", [])
+            if all(
+                topic.get("relevance_score", 0) >= min_relevance for topic in topics
+            ) and item.get("overall_sentiment_score", 0) >= min_sentiment:
+                filtered_data.append(item)
     return filtered_data
+
 
 def validate_rag_data(rag_data, source):
     """Validate and filter RAG data for relevance."""
@@ -60,6 +63,7 @@ def validate_rag_data(rag_data, source):
         st.warning(f"No data retrieved from {source}.")
         return []
 
+    # Filter data safely
     filtered_data = filter_by_relevance_and_sentiment(rag_data)
     if not filtered_data:
         st.warning(f"No highly relevant or positive sentiment data found in {source}.")
