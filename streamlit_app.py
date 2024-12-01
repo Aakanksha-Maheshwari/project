@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as st 
 import requests
 import json
 import openai
@@ -35,12 +35,14 @@ st.title("Multi-Agent Financial Newsletter Generator")
 def fetch_and_store_data(api_url, collection_name, output_queue):
     """Agent: Fetch and store data in ChromaDB."""
     try:
+        st.info(f"Fetching data for {collection_name} from {api_url}...")
         response = requests.get(api_url)
         response.raise_for_status()
         data = response.json()
 
         if not data:
             output_queue.put((collection_name, None, "No data returned from API."))
+            st.warning(f"No data returned for {collection_name}.")
             return
 
         collection = client.get_or_create_collection(collection_name)
@@ -51,18 +53,22 @@ def fetch_and_store_data(api_url, collection_name, output_queue):
                 metadatas=[{"source": item.get("source", "N/A")}]
             )
         output_queue.put((collection_name, "Data fetched and stored successfully.", None))
+        st.success(f"Data successfully stored for {collection_name}.")
     except Exception as e:
+        st.error(f"Error fetching data for {collection_name}: {e}")
         output_queue.put((collection_name, None, f"Error: {str(e)}"))
 
 def retrieve_and_summarize(collection_name, query_text, top_k, output_queue):
     """Agent: Retrieve and summarize data from ChromaDB."""
     try:
+        st.info(f"Retrieving and summarizing data from {collection_name}...")
         collection = client.get_or_create_collection(collection_name)
         results = collection.query(query_texts=[query_text], n_results=top_k)
         documents = [json.loads(doc) if isinstance(doc, str) else doc for doc in results["documents"] if doc]
 
         if not documents:
             output_queue.put((collection_name, "No relevant data found.", None))
+            st.warning(f"No relevant data found in {collection_name}.")
             return
 
         summary_prompt = f"""
@@ -72,12 +78,15 @@ def retrieve_and_summarize(collection_name, query_text, top_k, output_queue):
         """
         summary = call_openai_gpt4(summary_prompt)
         output_queue.put((collection_name, summary, documents))
+        st.success(f"Summary generated for {collection_name}.")
     except Exception as e:
+        st.error(f"Error retrieving data from {collection_name}: {e}")
         output_queue.put((collection_name, None, f"Error: {str(e)}"))
 
 def call_openai_gpt4(prompt):
     """Call OpenAI GPT-4 to process the prompt."""
     try:
+        st.info("Calling OpenAI GPT-4 for response...")
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -85,24 +94,28 @@ def call_openai_gpt4(prompt):
                 {"role": "user", "content": prompt}
             ]
         )
-        # Extract the message content as a single value
         return response.choices[0].message.content.strip()
     except Exception as e:
+        st.error(f"Error calling GPT-4: {e}")
         return f"Error: {str(e)}"
 
 def assess_accuracy_with_bespoke(newsletter, relevant_data):
     """Agent: Use Bespoke Labs to assess newsletter accuracy."""
     try:
+        st.info("Assessing newsletter accuracy with Bespoke Labs...")
         response = bl.minicheck.factcheck.create(
             claim=newsletter,
             context=json.dumps(relevant_data)
         )
         support_prob = getattr(response, "support_prob", None)
         if support_prob is None:
-            return 0, "Bespoke Labs response does not contain 'support_prob'."
+            st.warning("Bespoke Labs response does not contain 'support_prob'.")
+            return 0, "Missing 'support_prob' in Bespoke response."
 
+        st.success(f"Accuracy assessed: {round(support_prob * 100, 2)}%")
         return round(support_prob * 100, 2), None
     except Exception as e:
+        st.error(f"Error assessing accuracy with Bespoke Labs: {e}")
         return 0, f"Error: {str(e)}"
 
 ### Multi-Agent Execution ###
@@ -120,8 +133,10 @@ def market_trends_agent(output_queue):
 def risk_management_agent(company_data, market_data, output_queue):
     """Risk Management Agent."""
     try:
+        st.info("Performing risk management analysis...")
         if not company_data or not market_data:
             output_queue.put(("risk_management", "No risk data available.", None))
+            st.warning("No risk data available for analysis.")
             return
 
         risk_prompt = f"""
@@ -132,12 +147,15 @@ def risk_management_agent(company_data, market_data, output_queue):
         """
         risk_summary = call_openai_gpt4(risk_prompt)
         output_queue.put(("risk_management", risk_summary, None))
+        st.success("Risk management analysis complete.")
     except Exception as e:
+        st.error(f"Error in Risk Management Agent: {e}")
         output_queue.put(("risk_management", None, f"Error: {str(e)}"))
 
 def newsletter_agent(company_summary, market_summary, risk_summary, output_queue):
     """Newsletter Generator Agent."""
     try:
+        st.info("Generating newsletter...")
         prompt = f"""
         Generate a financial newsletter combining:
         - Company Insights: {company_summary}
@@ -147,7 +165,9 @@ def newsletter_agent(company_summary, market_summary, risk_summary, output_queue
         """
         newsletter = call_openai_gpt4(prompt)
         output_queue.put(("newsletter", newsletter, None))
+        st.success("Newsletter generated successfully.")
     except Exception as e:
+        st.error(f"Error in Newsletter Generator Agent: {e}")
         output_queue.put(("newsletter", None, f"Error: {str(e)}"))
 
 ### Main Logic ###
@@ -169,19 +189,20 @@ if st.button("Generate Financial Newsletter"):
         market_summary, market_data = None, []
         while not output_queue.empty():
             name, result, error = output_queue.get()
+            st.info(f"Queue data received: {name}, Result: {result}, Error: {error}")
             if error:
                 st.error(f"{name} Error: {error}")
             else:
                 if name == "news_sentiment_data":
                     if isinstance(result, str):
-                        company_summary = result  # Summary of company data
+                        company_summary = result
                     elif isinstance(result, list):
-                        company_data = result  # Actual company data
+                        company_data = result
                 elif name == "ticker_trends_data":
                     if isinstance(result, str):
-                        market_summary = result  # Summary of market trends
+                        market_summary = result
                     elif isinstance(result, list):
-                        market_data = result  # Actual market data
+                        market_data = result
 
         # Risk management agent
         risk_process = Process(
