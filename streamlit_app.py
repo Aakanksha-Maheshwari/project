@@ -29,7 +29,7 @@ st.title("Alpha Vantage Multi-Agent System with RAG, OpenAI GPT-4, and Bespoke L
 
 ### Helper Functions ###
 
-def retrieve_from_chromadb(collection_name, query, top_k=10):
+def retrieve_from_chromadb(collection_name, query, top_k=20):
     """Retrieve relevant documents from ChromaDB."""
     collection = client.get_or_create_collection(collection_name)
     try:
@@ -37,21 +37,21 @@ def retrieve_from_chromadb(collection_name, query, top_k=10):
             query_texts=[query],
             n_results=top_k
         )
+        st.write(f"Raw results from ChromaDB ({collection_name}):", results)
         return [json.loads(doc) if isinstance(doc, str) else doc for doc in results['documents'] if doc]
     except Exception as e:
         st.error(f"Error retrieving data from ChromaDB: {e}")
         return []
 
-def filter_by_relevance(data, min_relevance=0.5):
+def filter_by_relevance(data, min_relevance=0.3):
     """Filter data by relevance score threshold."""
     filtered_data = []
     for item in data:
-        if isinstance(item, dict):  # Ensure item is a dictionary
+        if isinstance(item, dict):
             topics = item.get("topics", [])
             if any(topic.get("relevance_score", 0) >= min_relevance for topic in topics):
                 filtered_data.append(item)
     return filtered_data
-
 
 def validate_rag_data(rag_data, source):
     """Validate and filter RAG data for relevance."""
@@ -59,9 +59,10 @@ def validate_rag_data(rag_data, source):
         st.warning(f"No data retrieved from {source}.")
         return []
 
-    filtered_data = filter_by_relevance_and_sentiment(rag_data)
+    filtered_data = filter_by_relevance(rag_data)
+    st.write(f"Filtered data from {source}:", filtered_data)
     if not filtered_data:
-        st.warning(f"No highly relevant or positive sentiment data found in {source}.")
+        st.warning(f"No highly relevant data found in {source}.")
     else:
         st.write(f"Retrieved {len(filtered_data)} high-quality items from {source}.")
     return filtered_data
@@ -148,10 +149,10 @@ def generate_fallback_newsletter():
 
 def generate_newsletter_with_accuracy():
     """Generate the newsletter using RAG and measure its accuracy."""
-    company_insights = retrieve_from_chromadb("news_sentiment_data", "Company performance insights", top_k=10)
+    company_insights = retrieve_from_chromadb("news_sentiment_data", "Insights", top_k=20)
     company_insights = validate_rag_data(company_insights, "News Sentiment Data")
 
-    market_trends = retrieve_from_chromadb("ticker_trends_data", "Market trends insights", top_k=10)
+    market_trends = retrieve_from_chromadb("ticker_trends_data", "Trends", top_k=20)
     market_trends = validate_rag_data(market_trends, "Ticker Trends Data")
 
     if not company_insights and not market_trends:
