@@ -38,7 +38,7 @@ def get_embedding(text, model="text-embedding-ada-002"):
     try:
         text = text.replace("\n", " ")
         response = client_openai.embeddings.create(input=[text], model=model)
-        return response.data[0].embedding
+        return response['data'][0]['embedding']
     except Exception as e:
         st.error(f"Error generating embedding: {e}")
         return None
@@ -51,12 +51,12 @@ def store_data_in_chromadb(api_url, collection_name):
         response.raise_for_status()
         data = response.json()
 
-        if not data:
+        if not data or "feed" not in data:
             st.warning(f"No data returned for {collection_name}.")
             return
 
         collection = client.get_or_create_collection(collection_name)
-        for i, item in enumerate(data.get("feed", []), start=1):
+        for i, item in enumerate(data["feed"], start=1):
             summary = item.get('summary', '')
             if not summary:
                 continue
@@ -108,21 +108,29 @@ def assess_accuracy_with_bespoke(newsletter, rag_summary):
     """Compare newsletter with RAG summary."""
     try:
         st.info("Assessing newsletter accuracy...")
-        response = client_openai.embeddings.create(
-            input=[newsletter] + [item["summary"] for item in rag_summary],
-            model="text-embedding-ada-002"
-        )
-        newsletter_embedding = response.data[0].embedding
-        rag_embeddings = [r.data.embedding for r in response.data[1:]]
+        newsletter_embedding = get_embedding(newsletter, model="text-embedding-ada-002")
+        if not newsletter_embedding:
+            st.error("Failed to generate embedding for newsletter.")
+            return 0, "Error generating newsletter embedding."
 
-        similarities = [cosine_similarity(newsletter_embedding, e) for e in rag_embeddings]
-        average_similarity = sum(similarities) / len(similarities)
-        accuracy_percentage = round(average_similarity * 100, 2)
+        rag_embeddings = [get_embedding(item["summary"], model="text-embedding-ada-002") for item in rag_summary]
+        if not all(rag_embeddings):
+            st.error("Failed to generate embeddings for RAG summaries.")
+            return 0, "Error generating RAG embeddings."
+
+        similarities = [cosine_similarity(newsletter_embedding, e) for e in rag_embeddings if e]
+        accuracy_percentage = round((sum(similarities) / len(similarities)) * 100, 2) if similarities else 0
 
         return accuracy_percentage, None
     except Exception as e:
         st.error(f"Error assessing accuracy: {e}")
         return 0, f"Error: {str(e)}"
+
+def cosine_similarity(vec1, vec2):
+    """Compute the cosine similarity between two vectors."""
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    magnitude = (sum(a ** 2 for a in vec1) ** 0.5) * (sum(b ** 2 for b in vec2) ** 0.5)
+    return dot_product / magnitude if magnitude else 0
 
 ### Multi-Agent Execution ###
 
